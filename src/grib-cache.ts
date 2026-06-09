@@ -103,7 +103,7 @@ function cornerIndices(lat: number, lon: number, meta: CacheFileMeta) {
   const lonWest = lonFirst + iWest * dLon
   const lonEast = lonFirst + iEast * dLon
 
-  return { jSouth, jNorth, iWest, iEast, latSouth, latNorth, lonWest, lonEast }
+  return { jSouth, jNorth, iWest, iEast, latSouth, latNorth, lonWest, lonEast, normLon }
 }
 
 // Read 4 surrounding grid points and return bilinearly interpolated values.
@@ -127,8 +127,8 @@ export async function queryAtPosition(
 
     const dLat = c.latNorth - c.latSouth
     const dLon = c.lonEast  - c.lonWest
-    const dy = dLat > 0 ? (lat - c.latSouth) / dLat : 0
-    const dx = dLon > 0 ? (lon - c.lonWest)  / dLon : 0
+    const dy = dLat > 0 ? (lat - c.latSouth)    / dLat : 0
+    const dx = dLon > 0 ? (c.normLon - c.lonWest) / dLon : 0
 
     const allKeys = new Set([
       ...Object.keys(sw), ...Object.keys(se),

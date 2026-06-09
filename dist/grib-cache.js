@@ -125,7 +125,7 @@ function cornerIndices(lat, lon, meta) {
     const iEast = iWest + 1;
     const lonWest = lonFirst + iWest * dLon;
     const lonEast = lonFirst + iEast * dLon;
-    return { jSouth, jNorth, iWest, iEast, latSouth, latNorth, lonWest, lonEast };
+    return { jSouth, jNorth, iWest, iEast, latSouth, latNorth, lonWest, lonEast, normLon };
 }
 // Read 4 surrounding grid points and return bilinearly interpolated values.
 // Opens the file once, issues 4 parallel reads, closes.
@@ -142,7 +142,7 @@ async function queryAtPosition(filePath, meta, lat, lon) {
         const dLat = c.latNorth - c.latSouth;
         const dLon = c.lonEast - c.lonWest;
         const dy = dLat > 0 ? (lat - c.latSouth) / dLat : 0;
-        const dx = dLon > 0 ? (lon - c.lonWest) / dLon : 0;
+        const dx = dLon > 0 ? (c.normLon - c.lonWest) / dLon : 0;
         const allKeys = new Set([
             ...Object.keys(sw), ...Object.keys(se),
             ...Object.keys(nw), ...Object.keys(ne),
