@@ -1,0 +1,21 @@
+{
+  "name": "signalk-grib-weather-provider",
+  "version": "0.1.0",
+  "description": "Signal K Weather API provider for local GRIB2 files (GFS, Arpège, Arome, ICON)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "keywords": ["signalk-node-server-plugin"],
+  "author": "",
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "@signalk/server-api": ">=2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@signalk/server-api": "^2.25.0",
+    "typescript": "^5.0.0"
+  }
+}
