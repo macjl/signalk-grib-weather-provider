@@ -94,9 +94,24 @@ async function readPoint(fh, meta, j, i) {
     return result;
 }
 // Compute the 4 surrounding grid cell corner indices and coordinates for (lat, lon).
-// Returns { jSouth, jNorth, iWest, iEast, latSouth, latNorth, lonWest, lonEast }
+// Returns null if the point lies outside the grid coverage area.
 function cornerIndices(lat, lon, meta) {
     const { latFirst, lonFirst, dLat, dLon, nLat, nLon, jScansPositively } = meta.grid;
+    // Latitude bounds check
+    const latMin = jScansPositively ? latFirst : latFirst - (nLat - 1) * dLat;
+    const latMax = jScansPositively ? latFirst + (nLat - 1) * dLat : latFirst;
+    if (lat < latMin || lat > latMax)
+        return null;
+    // Normalise lon to [lonFirst, lonFirst+360)
+    let normLon = lon;
+    while (normLon < lonFirst)
+        normLon += 360;
+    while (normLon >= lonFirst + 360)
+        normLon -= 360;
+    // Longitude bounds check
+    const lonMax = lonFirst + (nLon - 1) * dLon;
+    if (normLon < lonFirst || normLon > lonMax)
+        return null;
     let jSouth, jNorth, latSouth, latNorth;
     if (!jScansPositively) {
         // N→S grid (GFS): j=0 is northernmost, lat decreases with j
@@ -114,12 +129,6 @@ function cornerIndices(lat, lon, meta) {
         latSouth = latFirst + jSouth * dLat;
         latNorth = latFirst + jNorth * dLat;
     }
-    // Normalise lon to [lonFirst, lonFirst+360)
-    let normLon = lon;
-    while (normLon < lonFirst)
-        normLon += 360;
-    while (normLon >= lonFirst + 360)
-        normLon -= 360;
     const iW = Math.floor((normLon - lonFirst) / dLon);
     const iWest = Math.max(0, Math.min(nLon - 2, iW));
     const iEast = iWest + 1;
@@ -131,6 +140,8 @@ function cornerIndices(lat, lon, meta) {
 // Opens the file once, issues 4 parallel reads, closes.
 async function queryAtPosition(filePath, meta, lat, lon) {
     const c = cornerIndices(lat, lon, meta);
+    if (!c)
+        return {}; // position outside grid coverage
     const fh = await fs.promises.open(filePath, 'r');
     try {
         const [sw, se, nw, ne] = await Promise.all([

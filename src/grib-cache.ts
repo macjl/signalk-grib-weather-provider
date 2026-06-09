@@ -70,9 +70,23 @@ async function readPoint(
 }
 
 // Compute the 4 surrounding grid cell corner indices and coordinates for (lat, lon).
-// Returns { jSouth, jNorth, iWest, iEast, latSouth, latNorth, lonWest, lonEast }
+// Returns null if the point lies outside the grid coverage area.
 function cornerIndices(lat: number, lon: number, meta: CacheFileMeta) {
   const { latFirst, lonFirst, dLat, dLon, nLat, nLon, jScansPositively } = meta.grid
+
+  // Latitude bounds check
+  const latMin = jScansPositively ? latFirst : latFirst - (nLat - 1) * dLat
+  const latMax = jScansPositively ? latFirst + (nLat - 1) * dLat : latFirst
+  if (lat < latMin || lat > latMax) return null
+
+  // Normalise lon to [lonFirst, lonFirst+360)
+  let normLon = lon
+  while (normLon < lonFirst) normLon += 360
+  while (normLon >= lonFirst + 360) normLon -= 360
+
+  // Longitude bounds check
+  const lonMax = lonFirst + (nLon - 1) * dLon
+  if (normLon < lonFirst || normLon > lonMax) return null
 
   let jSouth: number, jNorth: number, latSouth: number, latNorth: number
 
@@ -92,11 +106,6 @@ function cornerIndices(lat: number, lon: number, meta: CacheFileMeta) {
     latNorth = latFirst + jNorth * dLat
   }
 
-  // Normalise lon to [lonFirst, lonFirst+360)
-  let normLon = lon
-  while (normLon < lonFirst) normLon += 360
-  while (normLon >= lonFirst + 360) normLon -= 360
-
   const iW = Math.floor((normLon - lonFirst) / dLon)
   const iWest = Math.max(0, Math.min(nLon - 2, iW))
   const iEast = iWest + 1
@@ -115,6 +124,7 @@ export async function queryAtPosition(
   lon: number
 ): Promise<Record<string, number>> {
   const c = cornerIndices(lat, lon, meta)
+  if (!c) return {}  // position outside grid coverage
 
   const fh = await fs.promises.open(filePath, 'r')
   try {
