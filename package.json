@@ -7,7 +7,7 @@
     "build": "tsc",
     "watch": "tsc -w",
     "pretest": "npm run build",
-    "test": "node --test test/",
+    "test": "node --test",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
