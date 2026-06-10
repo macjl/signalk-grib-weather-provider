@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.1.0] — Unreleased
+## [0.1.0] — 2026-06-10
 
 ### Added
 - Signal K Weather API provider backed by local GRIB2 files
