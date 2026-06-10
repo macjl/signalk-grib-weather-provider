@@ -1,6 +1,6 @@
 import { Plugin, ServerAPI } from '@signalk/server-api'
 import { WeatherProviderRegistry } from '@signalk/server-api'
-import { GribStore } from './grib-store'
+import { GribStore, ScanSummary } from './grib-store'
 import { PluginSettings } from './types'
 import { DEFAULT_ECCODES_IMAGE } from './ingest-manager'
 
@@ -19,7 +19,7 @@ const CONFIG_SCHEMA = {
         'The name must be unique and URL-safe (letters, digits, hyphens).',
       items: {
         type: 'object',
-        required: ['name', 'directory', 'model'],
+        required: ['name', 'directory'],
         properties: {
           name: {
             type: 'string',
@@ -37,12 +37,6 @@ const CONFIG_SCHEMA = {
             type: 'string',
             title: 'GRIB directory',
             description: 'Absolute path to the directory containing GRIB2 files',
-          },
-          model: {
-            type: 'string',
-            title: 'Model',
-            enum: ['gfs', 'arpege', 'arome', 'icon'],
-            default: 'gfs',
           },
           cacheDirectory: {
             type: 'string',
@@ -99,17 +93,29 @@ module.exports = (server: PluginApp): Plugin => {
         return
       }
 
+      const onScan = (summary: ScanSummary) => {
+        const parts = summary.sources.map(s => `${s.name}: ${s.slices} slice(s)`)
+        if (summary.errors.length > 0) {
+          server.setPluginStatus(`${parts.join(', ')} — ${summary.errors.length} error(s), see debug log`)
+        } else {
+          server.setPluginStatus(parts.join(', '))
+        }
+      }
+
       store = new GribStore(
         sources,
         (msg: string) => server.debug(msg),
-        options.eccodesImage
+        options.eccodesImage,
+        onScan
       )
 
+      server.setPluginStatus('Waiting for container runtime …')
       containers.whenReady().then(() => {
         if (!containers.getRuntime()) {
           server.setPluginError('No container runtime detected (Docker/Podman not available)')
           return
         }
+        server.setPluginStatus('Scanning GRIB directories …')
         store!.start(options.scanIntervalMinutes ?? 5).catch((err: unknown) => {
           server.setPluginError(`Startup error: ${err}`)
         })
@@ -136,10 +142,6 @@ module.exports = (server: PluginApp): Plugin => {
         registeredIds.push(providerId)
         server.debug(`Registered weather provider: ${providerId} ("${displayName}")`)
       }
-
-      server.setPluginStatus(
-        `Running — ${sources.length} source(s): ${sources.map(s => s.label ?? s.name).join(', ')}`
-      )
     },
 
     stop: () => {

@@ -4,12 +4,17 @@ import { Position, WeatherData, WeatherForecastType, WeatherReqParams } from '@s
 import { CacheEntry, SourceConfig, TimeSlice } from './types'
 import { readCacheHeader, queryAtPosition } from './grib-cache'
 import { toWeatherData } from './weather-mapper'
-import { ingestGrib, cachePathFor, ensureImage, DEFAULT_ECCODES_IMAGE } from './ingest-manager'
+import { ingestGrib, gribBasename, ensureImage, CACHE_FILE_RE, DEFAULT_ECCODES_IMAGE } from './ingest-manager'
 
 const GRIB_EXTENSIONS = new Set(['.grb2', '.grib2', '.grb', '.grib'])
 
+export interface ScanSummary {
+  sources: { name: string; slices: number }[]
+  errors: string[]
+}
+
 export class GribStore {
-  // Per-source list of indexed .gribcache entries, sorted ascending by validAt
+  // Per-source list of indexed .gribcache entries, deduplicated and sorted ascending by validAt
   private index = new Map<string, CacheEntry[]>()
   private scanTimer: ReturnType<typeof setInterval> | null = null
   private eccodesImage: string
@@ -17,7 +22,8 @@ export class GribStore {
   constructor(
     private sources: SourceConfig[],
     private log: (msg: string) => void,
-    eccodesImage?: string
+    eccodesImage?: string,
+    private onScan?: (summary: ScanSummary) => void
   ) {
     this.eccodesImage = eccodesImage ?? DEFAULT_ECCODES_IMAGE
   }
@@ -51,17 +57,55 @@ export class GribStore {
     if (!entries || entries.length === 0) return []
 
     const startDate = options.startDate
-      ? new Date(options.startDate + 'T00:00:00Z')
+      ? new Date(options.startDate.includes('T') ? options.startDate : options.startDate + 'T00:00:00Z')
       : new Date()
 
-    let series = entries.filter(e => e.meta.validAt >= startDate)
-    if (options.maxCount) series = series.slice(0, options.maxCount)
+    let startIdx = entries.findIndex(e => e.meta.validAt >= startDate)
+    if (startIdx === -1) return []
+    const endIdx = options.maxCount
+      ? Math.min(entries.length, startIdx + options.maxCount)
+      : entries.length
+
+    const lat = position.latitude
+    const lon = position.longitude
+
+    // Precipitation de-cumulation: when precip is accumulated from run start
+    // (precipAccum[0] === 0), the per-step volume is the difference with the
+    // previous slice of the same run. Track the previous slice's raw value.
+    let prevPrecip: number | undefined
+    let prevRefTime: number | null = null
+
+    // Seed with the slice just before the window, if it belongs to the same run.
+    const first = entries[startIdx]
+    if (startIdx > 0 && this.cumulativePrecip(first)) {
+      const prev = entries[startIdx - 1]
+      if (this.sameRun(prev, first)) {
+        try {
+          const v = await queryAtPosition(prev.filePath, prev.meta, lat, lon)
+          prevPrecip  = v['precip']
+          prevRefTime = prev.meta.refTime?.getTime() ?? null
+        } catch { /* seed is best-effort */ }
+      }
+    }
 
     const results: WeatherData[] = []
-    for (const entry of series) {
+    for (let i = startIdx; i < endIdx; i++) {
+      const entry = entries[i]
       try {
-        const values = await queryAtPosition(entry.filePath, entry.meta, position.latitude, position.longitude)
+        const values = await queryAtPosition(entry.filePath, entry.meta, lat, lon)
         if (Object.keys(values).length === 0) continue
+
+        const rawPrecip = values['precip']
+        if (rawPrecip !== undefined && this.cumulativePrecip(entry)) {
+          const ref = entry.meta.refTime?.getTime() ?? null
+          if (prevPrecip !== undefined && ref !== null && ref === prevRefTime) {
+            values['precip'] = Math.max(0, rawPrecip - prevPrecip)
+          }
+          // else: first slice of a run — the cumulative value IS the step value
+        }
+        prevPrecip  = rawPrecip
+        prevRefTime = entry.meta.refTime?.getTime() ?? null
+
         const slice: TimeSlice = { validAt: entry.meta.validAt, values }
         results.push(toWeatherData(slice, type))
       } catch (err) {
@@ -71,64 +115,118 @@ export class GribStore {
     return results
   }
 
-  private async scanAll(): Promise<void> {
-    for (const source of this.sources) {
-      await this.scanSource(source).catch(err =>
-        this.log(`Scan error for source "${source.name}": ${err}`)
-      )
-    }
+  private cumulativePrecip(e: CacheEntry): boolean {
+    // precipAccum [0, N] = accumulated since run start → needs de-cumulation.
+    // [M, N] with M > 0 = interval bucket → already a per-step volume.
+    // Unknown window → serve as-is.
+    return e.meta.precipAccum !== null && e.meta.precipAccum[0] === 0
   }
 
-  private async scanSource(source: SourceConfig): Promise<void> {
+  private sameRun(a: CacheEntry, b: CacheEntry): boolean {
+    const ra = a.meta.refTime?.getTime()
+    const rb = b.meta.refTime?.getTime()
+    return ra !== undefined && rb !== undefined && ra === rb
+  }
+
+  private async scanAll(): Promise<void> {
+    const summary: ScanSummary = { sources: [], errors: [] }
+    for (const source of this.sources) {
+      try {
+        const slices = await this.scanSource(source)
+        summary.sources.push({ name: source.name, slices })
+      } catch (err) {
+        const msg = `Scan error for source "${source.name}": ${err}`
+        this.log(msg)
+        summary.errors.push(msg)
+        summary.sources.push({ name: source.name, slices: this.index.get(source.name)?.length ?? 0 })
+      }
+    }
+    this.onScan?.(summary)
+  }
+
+  // Returns the number of indexed slices for the source.
+  private async scanSource(source: SourceConfig): Promise<number> {
     const gribDir  = source.directory
     const cacheDir = source.cacheDirectory ?? gribDir
 
-    // List GRIB files
+    // List GRIB files → map basename → full path
     let gribFiles: string[]
     try {
       gribFiles = fs.readdirSync(gribDir)
         .filter(f => GRIB_EXTENSIONS.has(path.extname(f).toLowerCase()))
         .map(f => path.join(gribDir, f))
     } catch {
-      this.log(`Cannot read directory for source "${source.name}": ${gribDir}`)
-      return
+      throw new Error(`Cannot read directory: ${gribDir}`)
+    }
+    const gribBasenames = new Set(gribFiles.map(gribBasename))
+
+    // Purge: remove cache files that are legacy-format (no .t<stamp> suffix)
+    // or whose source GRIB no longer exists.
+    let cacheListing: string[]
+    try {
+      cacheListing = fs.readdirSync(cacheDir)
+    } catch {
+      cacheListing = []  // cache dir may not exist yet — ingest creates it
+    }
+    const ingestedBasenames = new Set<string>()
+    for (const f of cacheListing) {
+      if (!f.endsWith('.gribcache')) continue
+      const m = CACHE_FILE_RE.exec(f)
+      if (m && gribBasenames.has(m[1])) {
+        ingestedBasenames.add(m[1])
+      } else {
+        const stale = path.join(cacheDir, f)
+        this.log(`Purging stale cache file: ${f}`)
+        fs.promises.unlink(stale).catch(err => this.log(`Cannot purge ${f}: ${err}`))
+      }
     }
 
-    // Trigger ingest for any GRIB file that doesn't have a .gribcache yet
-    const ingestPromises = gribFiles.map(gribPath =>
+    // Ingest GRIB files that have no cache slices yet
+    const toIngest = gribFiles.filter(g => !ingestedBasenames.has(gribBasename(g)))
+    await Promise.all(toIngest.map(gribPath =>
       ingestGrib(gribPath, cacheDir, this.eccodesImage, this.log).catch(err =>
         this.log(`Ingest failed for ${path.basename(gribPath)}: ${err}`)
       )
-    )
-    await Promise.all(ingestPromises)
+    ))
 
     // Re-read cache directory and build index
     let cacheFiles: string[]
     try {
       cacheFiles = fs.readdirSync(cacheDir)
-        .filter(f => f.endsWith('.gribcache'))
+        .filter(f => CACHE_FILE_RE.test(f))
         .map(f => path.join(cacheDir, f))
     } catch {
-      this.log(`Cannot read cache directory for source "${source.name}": ${cacheDir}`)
-      return
+      throw new Error(`Cannot read cache directory: ${cacheDir}`)
     }
 
-    const entries: CacheEntry[] = []
+    const parsed: CacheEntry[] = []
     for (const filePath of cacheFiles) {
       try {
         const meta = await readCacheHeader(filePath)
-        entries.push({ filePath, meta })
+        parsed.push({ filePath, meta })
       } catch (err) {
-        this.log(`Cannot read cache header ${path.basename(filePath)}: ${err}`)
+        // Unreadable or outdated format — delete so the GRIB gets re-ingested
+        this.log(`Purging unreadable cache file ${path.basename(filePath)}: ${err}`)
+        fs.promises.unlink(filePath).catch(() => {})
       }
     }
 
-    // Sort ascending by validity time
-    entries.sort((a, b) => a.meta.validAt.getTime() - b.meta.validAt.getTime())
+    // Deduplicate by validity time — the most recent run wins
+    const byTime = new Map<number, CacheEntry>()
+    for (const entry of parsed) {
+      const t = entry.meta.validAt.getTime()
+      const existing = byTime.get(t)
+      if (!existing ||
+          (entry.meta.refTime?.getTime() ?? 0) > (existing.meta.refTime?.getTime() ?? 0)) {
+        byTime.set(t, entry)
+      }
+    }
+
+    const entries = [...byTime.values()]
+      .sort((a, b) => a.meta.validAt.getTime() - b.meta.validAt.getTime())
 
     this.index.set(source.name, entries)
-    this.log(
-      `Source "${source.name}": ${entries.length} cache file(s) indexed`
-    )
+    this.log(`Source "${source.name}": ${entries.length} slice(s) indexed (${parsed.length} cache files)`)
+    return entries.length
   }
 }

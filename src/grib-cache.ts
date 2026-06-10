@@ -2,7 +2,7 @@ import * as fs from 'fs'
 import { CacheFileMeta, GridMeta } from './types'
 
 const MAGIC = Buffer.from('GRBC')
-const VERSION = 1
+const VERSION = 2
 
 // Parse the binary header of a .gribcache file. Does not load data.
 export async function readCacheHeader(filePath: string): Promise<CacheFileMeta> {
@@ -33,11 +33,13 @@ export async function readCacheHeader(filePath: string): Promise<CacheFileMeta> 
       jScansPositively: m.jScansPositively,
     }
     return {
-      validAt:   new Date(m.validAt),
+      validAt:     new Date(m.validAt),
+      refTime:     m.refTime ? new Date(m.refTime) : null,
+      precipAccum: Array.isArray(m.precipAccum) ? [m.precipAccum[0], m.precipAccum[1]] : null,
       grid,
-      vars:      m.vars as string[],
-      nVars:     m.vars.length,
-      dataStart: 9 + jsonLen,
+      vars:        m.vars as string[],
+      nVars:       m.vars.length,
+      dataStart:   9 + jsonLen,
     }
   } finally {
     await fh.close()

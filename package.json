@@ -1,15 +1,49 @@
 {
   "name": "signalk-grib-weather-provider",
   "version": "0.1.0",
-  "description": "Signal K Weather API provider for local GRIB2 files (GFS, Arpège, Arome, ICON)",
+  "description": "Signal K Weather API provider serving local GRIB2 files (GFS, Arpège, Arome, ICON) — each source becomes a selectable weather provider",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "watch": "tsc -w"
+    "watch": "tsc -w",
+    "pretest": "npm run build",
+    "test": "node --test test/",
+    "prepublishOnly": "npm run build"
   },
-  "keywords": ["signalk-node-server-plugin"],
-  "author": "",
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-category-weather",
+    "signalk",
+    "weather",
+    "grib",
+    "grib2",
+    "gfs",
+    "forecast",
+    "marine"
+  ],
+  "author": "Jean-Laurent Girod (@macjl)",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/macjl/signalk-grib-weather-provider.git"
+  },
+  "homepage": "https://github.com/macjl/signalk-grib-weather-provider#readme",
+  "bugs": {
+    "url": "https://github.com/macjl/signalk-grib-weather-provider/issues"
+  },
+  "files": [
+    "dist/",
+    "eccodes-container/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "signalk-plugin-enabled-by-default": false,
+  "signalk": {
+    "displayName": "GRIB Weather Provider"
+  },
   "peerDependencies": {
     "@signalk/server-api": ">=2.0.0"
   },

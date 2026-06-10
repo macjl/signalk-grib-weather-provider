@@ -2,7 +2,6 @@ export interface SourceConfig {
   name: string         // unique ID — used as provider ID suffix and index key
   label?: string       // human-readable display name (defaults to name)
   directory: string    // absolute path to directory containing GRIB2 files
-  model: string
   cacheDirectory?: string  // where .gribcache files are written; defaults to `directory`
 }
 
@@ -25,6 +24,8 @@ export interface GridMeta {
 // Parsed header of a .gribcache file — no data in RAM
 export interface CacheFileMeta {
   validAt: Date
+  refTime: Date | null                 // model run reference time (dedup across runs)
+  precipAccum: [number, number] | null // precip accumulation window [startStep, endStep] in forecast hours
   grid: GridMeta
   vars: string[]    // ordered list of field names matching the float32 layout
   nVars: number
