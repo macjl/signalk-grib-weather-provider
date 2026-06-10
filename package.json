@@ -43,7 +43,10 @@
   },
   "signalk-plugin-enabled-by-default": false,
   "signalk": {
-    "displayName": "GRIB Weather Provider"
+    "displayName": "GRIB Weather Provider",
+    "requires": [
+      "signalk-container"
+    ]
   },
   "peerDependencies": {
     "@signalk/server-api": ">=2.0.0"

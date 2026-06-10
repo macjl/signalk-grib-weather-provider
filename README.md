@@ -33,8 +33,9 @@ automatically.
 ## Requirements
 
 - Signal K server ≥ 2.x (Weather API)
-- The [signalk-container](https://github.com/macjl/signalk-container) plugin with a
-  working container runtime (Docker or Podman)
+- The [signalk-container](https://github.com/dirkwa/signalk-container) plugin with a
+  working container runtime (Docker or Podman) — declared via `signalk.requires`,
+  so the App Store installs it automatically alongside this plugin
 - The eccodes conversion image `ghcr.io/macjl/signalk-grib-eccodes:latest`
   (multi-arch amd64/arm64). It is pulled automatically on first use; you can also
   build it yourself from [`eccodes-container/`](eccodes-container/):
