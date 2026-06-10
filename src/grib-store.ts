@@ -73,21 +73,26 @@ export class GribStore {
     const lat = position.latitude
     const lon = position.longitude
 
-    // Precipitation de-cumulation: when precip is accumulated from run start
-    // (precipAccum[0] === 0), the per-step volume is the difference with the
-    // previous slice of the same run. Track the previous slice's raw value.
-    let prevPrecip: number | undefined
-    let prevRefTime: number | null = null
+    // Precipitation handling. GRIB precip is accumulated over a window
+    // [start, end] in forecast hours (precipAccum). Successive slices often
+    // share the same window origin (GFS: [0,3], [0,6], [6,9], [6,12], …) —
+    // subtracting the previous slice of the same run and bucket yields the
+    // volume since that slice. The result is then normalised to volume per
+    // hour so values are comparable across models and timestep sizes.
+    let prev: { ref: number | null; accum: [number, number]; raw: number } | null = null
 
-    // Seed with the slice just before the window, if it belongs to the same run.
+    // Seed with the slice just before the window, if it chains with the first one.
     const first = entries[startIdx]
-    if (startIdx > 0 && this.cumulativePrecip(first)) {
-      const prev = entries[startIdx - 1]
-      if (this.sameRun(prev, first)) {
+    const firstAccum = first.meta.precipAccum
+    if (startIdx > 0 && firstAccum !== null) {
+      const p = entries[startIdx - 1]
+      const pa = p.meta.precipAccum
+      if (this.sameRun(p, first) && pa !== null && pa[0] === firstAccum[0] && pa[1] < firstAccum[1]) {
         try {
-          const v = await queryAtPosition(prev.filePath, prev.meta, lat, lon)
-          prevPrecip  = v['precip']
-          prevRefTime = prev.meta.refTime?.getTime() ?? null
+          const v = await queryAtPosition(p.filePath, p.meta, lat, lon)
+          if (v['precip'] !== undefined) {
+            prev = { ref: p.meta.refTime?.getTime() ?? null, accum: pa, raw: v['precip'] }
+          }
         } catch { /* seed is best-effort */ }
       }
     }
@@ -100,15 +105,20 @@ export class GribStore {
         if (Object.keys(values).length === 0) continue
 
         const rawPrecip = values['precip']
-        if (rawPrecip !== undefined && this.cumulativePrecip(entry)) {
+        const accum = entry.meta.precipAccum
+        if (rawPrecip !== undefined && accum !== null) {
           const ref = entry.meta.refTime?.getTime() ?? null
-          if (prevPrecip !== undefined && ref !== null && ref === prevRefTime) {
-            values['precip'] = Math.max(0, rawPrecip - prevPrecip)
+          let stepVol = rawPrecip
+          let windowH = accum[1] - accum[0]
+          if (prev && ref !== null && prev.ref === ref &&
+              prev.accum[0] === accum[0] && prev.accum[1] > accum[0] && prev.accum[1] < accum[1]) {
+            stepVol = Math.max(0, rawPrecip - prev.raw)
+            windowH = accum[1] - prev.accum[1]
           }
-          // else: first slice of a run — the cumulative value IS the step value
+          values['precip'] = windowH > 0 ? stepVol / windowH : stepVol
+          prev = { ref, accum, raw: rawPrecip }
         }
-        prevPrecip  = rawPrecip
-        prevRefTime = entry.meta.refTime?.getTime() ?? null
+        // Unknown accumulation window: serve raw value, keep the chain as is.
 
         const slice: TimeSlice = { validAt: entry.meta.validAt, values }
         results.push(toWeatherData(slice, type))
@@ -117,13 +127,6 @@ export class GribStore {
       }
     }
     return results
-  }
-
-  private cumulativePrecip(e: CacheEntry): boolean {
-    // precipAccum [0, N] = accumulated since run start → needs de-cumulation.
-    // [M, N] with M > 0 = interval bucket → already a per-step volume.
-    // Unknown window → serve as-is.
-    return e.meta.precipAccum !== null && e.meta.precipAccum[0] === 0
   }
 
   private sameRun(a: CacheEntry, b: CacheEntry): boolean {

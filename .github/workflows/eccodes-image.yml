@@ -31,10 +31,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute tags
+        id: tags
+        run: |
+          IMAGE="ghcr.io/${{ github.repository_owner }}/signalk-grib-eccodes"
+          TAGS="$IMAGE:latest"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            TAGS="$TAGS,$IMAGE:${VERSION#v}"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
       - name: Build and push (amd64 + arm64)
         uses: docker/build-push-action@v6
         with:
           context: eccodes-container
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/signalk-grib-eccodes:latest
+          tags: ${{ steps.tags.outputs.tags }}

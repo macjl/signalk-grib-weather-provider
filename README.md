@@ -25,10 +25,10 @@ GRIB2 files ──▶ eccodes container job ──▶ .gribcache files ──▶
 Extracted variables (when present): 10 m wind U/V, gust, 2 m temperature,
 MSL pressure, 2 m relative humidity, total precipitation, total cloud cover.
 
-Precipitation accumulated since the model run start is automatically converted to
-per-timestep volumes. When two runs overlap, the most recent run wins for each
-validity time. Cache files whose source GRIB has been deleted are purged
-automatically.
+Precipitation is de-cumulated within accumulation buckets and normalised to
+**volume per hour**, so values are comparable across models and timestep sizes.
+When two runs overlap, the most recent run wins for each validity time. Cache
+files whose source GRIB has been deleted are purged automatically.
 
 ## Requirements
 

@@ -13,7 +13,8 @@ All notable changes to this project will be documented in this file.
 - Bilinear interpolation over the 4 surrounding grid points, disk-only reads (no grids in RAM)
 - Longitude normalisation across the antimeridian
 - Deduplication of overlapping runs — the most recent run wins per validity time
-- Precipitation de-cumulation: run-start-accumulated `tp` converted to per-timestep volumes
+- Precipitation de-cumulation within accumulation buckets, normalised to volume per hour (comparable across models and timestep sizes)
+- App Store screenshot; eccodes image tagged with the release version in addition to `latest`
 - Automatic purge of orphaned and legacy cache files
 - Ingest retry limit (5 attempts per file), then the file is ignored until restart
 - Plugin status reporting after each scan (slice counts per source, error count)

@@ -35,6 +35,7 @@
     "dist/",
     "eccodes-container/",
     "test/",
+    "screenshots/",
     "README.md",
     "CHANGELOG.md"
   ],
@@ -44,6 +45,9 @@
   "signalk-plugin-enabled-by-default": false,
   "signalk": {
     "displayName": "GRIB Weather Provider",
+    "screenshots": [
+      "./screenshots/grib-weather-provider.png"
+    ],
     "requires": [
       "signalk-container"
     ]
