@@ -43,8 +43,11 @@ PARAM_DEFS = [
     ('v',     'heightAboveGround', 10, 'windV',     1.0),
     ('gust',  'surface',           0,  'gust',      1.0),
     ('gust',  'heightAboveGround', 10, 'gust',      1.0),
+    ('max_i10fg', 'heightAboveGround', 10, 'gust',  1.0),   # AROME / ICON
     ('tp',    'surface',           0,  'precip',    0.001),
     ('tcc',   'entireAtmosphere',  0,  'cloudCover', 0.01),
+    ('tcc',   'atmosphere',        0,  'cloudCover', 0.01),  # GFS via NOMADS filter
+    ('CLCT',  'surface',           0,  'cloudCover', 0.01),  # ICON
 ]
 
 # Output field order (canonical)
