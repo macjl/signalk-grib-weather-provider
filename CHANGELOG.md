@@ -18,3 +18,4 @@ All notable changes to this project will be documented in this file.
 - Ingest retry limit (5 attempts per file), then the file is ignored until restart
 - Plugin status reporting after each scan (slice counts per source, error count)
 - Unit tests (`node --test`) for cache parsing, interpolation and weather mapping
+- `daily` forecast requests honestly return an empty array (only `point` forecasts are served)

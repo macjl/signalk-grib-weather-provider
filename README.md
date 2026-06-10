@@ -69,6 +69,8 @@ distributions and should work, but have not been validated yet.
 ## Limitations
 
 - `getObservations` and `getWarnings` return empty arrays (forecast data only).
+- `daily` forecast requests return an empty array — GRIB slices are
+  point-in-time values, only `point` forecasts are served.
 - Only regular lat/lon grids are supported (no Lambert, no rotated poles).
 - All messages in one GRIB file must share the same grid.
 

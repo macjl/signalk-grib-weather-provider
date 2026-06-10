@@ -53,6 +53,10 @@ export class GribStore {
     type: WeatherForecastType,
     options: WeatherReqParams = {}
   ): Promise<WeatherData[]> {
+    // GRIB slices are point-in-time values — we cannot honestly answer a
+    // 'daily' (aggregated min/max) request, so return an empty result.
+    if (type !== 'point') return []
+
     const entries = this.index.get(sourceName)
     if (!entries || entries.length === 0) return []
 
