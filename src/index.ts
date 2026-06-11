@@ -53,6 +53,15 @@ const CONFIG_SCHEMA = {
       default: 5,
       minimum: 1,
     },
+    maxConcurrentIngests: {
+      type: 'number',
+      title: 'Max concurrent ingest jobs',
+      description:
+        'Maximum number of GRIB→cache conversion containers running at once. ' +
+        'Each job loads full model grids in memory — keep low on small systems.',
+      default: 2,
+      minimum: 1,
+    },
     eccodesImage: {
       type: 'string',
       title: 'Eccodes container image',
@@ -106,7 +115,8 @@ module.exports = (server: PluginApp): Plugin => {
         sources,
         (msg: string) => server.debug(msg),
         options.eccodesImage,
-        onScan
+        onScan,
+        options.maxConcurrentIngests ?? 2
       )
 
       server.setPluginStatus('Waiting for container runtime …')

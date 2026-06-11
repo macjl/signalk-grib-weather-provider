@@ -136,7 +136,9 @@ def transform(grb_path: str):
                     except Exception:
                         pass
 
-                values = eccodes.codes_get_values(handle)  # ndarray float64
+                # Convert to float32 immediately — halves the memory held
+                # while the rest of the (possibly multi-timestep) file is read.
+                values = eccodes.codes_get_values(handle).astype(np.float32)
                 sl['fields'][field] = (scale, values)
 
             finally:
@@ -163,7 +165,7 @@ def encode_slice(grid_meta, ref_time, valid_at, sl) -> bytes:
     arrays = []
     for field in fields_present:
         scale, values = sl['fields'][field]
-        arrays.append((values * scale).astype(np.float32))
+        arrays.append((values * np.float32(scale)).astype(np.float32, copy=False))
     stacked = np.stack(arrays, axis=1)  # shape: (nLat*nLon, nVars)
 
     import io
@@ -195,7 +197,8 @@ def main():
         grid_meta, ref_time, slices = transform(grb_path)
         written = 0
         for valid_at in sorted(slices.keys()):
-            data = encode_slice(grid_meta, ref_time, valid_at, slices[valid_at])
+            # pop → the slice's arrays are freed as soon as it is written
+            data = encode_slice(grid_meta, ref_time, valid_at, slices.pop(valid_at))
             stamp = valid_at.replace('-', '').replace(':', '').replace('T', '')[:12]
             out_path = os.path.join(out_dir, f'{basename}.t{stamp}.gribcache')
             with open(out_path, 'wb') as out:

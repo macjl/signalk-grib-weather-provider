@@ -7,10 +7,25 @@ import { toWeatherData } from './weather-mapper'
 import { ingestGrib, gribBasename, ensureImage, CACHE_FILE_RE, DEFAULT_ECCODES_IMAGE } from './ingest-manager'
 
 const GRIB_EXTENSIONS = new Set(['.grb2', '.grib2', '.grb', '.grib'])
+const DEFAULT_MAX_CONCURRENT_INGESTS = 2
 
 export interface ScanSummary {
   sources: { name: string; slices: number }[]
   errors: string[]
+}
+
+// Run fn over items with at most `limit` concurrent executions.
+// Each ingest spawns a container loading full grids into RAM — unbounded
+// parallelism can exhaust the host (tens of GRIB files arrive per run).
+async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  const queue = [...items]
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, queue.length)) }, async () => {
+    let item: T | undefined
+    while ((item = queue.shift()) !== undefined) {
+      await fn(item)
+    }
+  })
+  await Promise.all(workers)
 }
 
 export class GribStore {
@@ -23,7 +38,8 @@ export class GribStore {
     private sources: SourceConfig[],
     private log: (msg: string) => void,
     eccodesImage?: string,
-    private onScan?: (summary: ScanSummary) => void
+    private onScan?: (summary: ScanSummary) => void,
+    private maxConcurrentIngests: number = DEFAULT_MAX_CONCURRENT_INGESTS
   ) {
     this.eccodesImage = eccodesImage ?? DEFAULT_ECCODES_IMAGE
   }
@@ -188,13 +204,13 @@ export class GribStore {
       }
     }
 
-    // Ingest GRIB files that have no cache slices yet
+    // Ingest GRIB files that have no cache slices yet — bounded concurrency
     const toIngest = gribFiles.filter(g => !ingestedBasenames.has(gribBasename(g)))
-    await Promise.all(toIngest.map(gribPath =>
-      ingestGrib(gribPath, cacheDir, this.eccodesImage, this.log).catch(err =>
+    await mapLimit(toIngest, this.maxConcurrentIngests, gribPath =>
+      ingestGrib(gribPath, cacheDir, this.eccodesImage, this.log).then(() => {}).catch(err =>
         this.log(`Ingest failed for ${path.basename(gribPath)}: ${err}`)
       )
-    ))
+    )
 
     // Re-read cache directory and build index
     let cacheFiles: string[]

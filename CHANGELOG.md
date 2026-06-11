@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] — Unreleased
+
+### Fixed
+- Ingest concurrency is now bounded (`maxConcurrentIngests`, default 2) — previously all pending GRIB files of a source were converted in parallel, spawning dozens of simultaneous containers that could exhaust the host's memory and I/O
+- `grib2cache.py` converts grids to float32 at read time and frees each slice after writing, halving the peak memory of a conversion job (an AROME SP1 package now converts within a 1 GB memory cap)
+
+### Added
+- shortName aliases: `max_i10fg` (AROME/ICON gust), `tcc|atmosphere` (NOMADS-filtered GFS cloud cover), `CLCT|surface` (ICON cloud cover)
+
 ## [0.1.0] — 2026-06-10
 
 ### Added

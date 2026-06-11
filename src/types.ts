@@ -8,6 +8,7 @@ export interface SourceConfig {
 export interface PluginSettings {
   sources: SourceConfig[]
   scanIntervalMinutes?: number
+  maxConcurrentIngests?: number  // cap on simultaneous GRIB→cache container jobs
   eccodesImage?: string  // Docker image for the eccodes container
 }
 
