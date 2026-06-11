@@ -2,7 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.1.1] — Unreleased
+## [0.2.0] — Unreleased
+
+### Changed (breaking)
+- Sources are now **discovered** from a single `rootDirectory`: every subdirectory is served as a provider named after the directory. The per-source configuration array (`sources`) is gone — replace it with `rootDirectory` (and optionally `cacheRoot`)
+- Caches moved out of the GRIB directories: `.gribcache` trees live under `cacheRoot` (default: the plugin data directory), mirroring source names
+- Providers register and unregister dynamically as directories appear and disappear — no restart needed
 
 ### Fixed
 - Ingest concurrency is now bounded (`maxConcurrentIngests`, default 2) — previously all pending GRIB files of a source were converted in parallel, spawning dozens of simultaneous containers that could exhaust the host's memory and I/O

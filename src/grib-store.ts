@@ -35,13 +35,33 @@ export class GribStore {
   private eccodesImage: string
 
   constructor(
-    private sources: SourceConfig[],
+    private rootDirectory: string,
+    private cacheRoot: string,
     private log: (msg: string) => void,
     eccodesImage?: string,
     private onScan?: (summary: ScanSummary) => void,
     private maxConcurrentIngests: number = DEFAULT_MAX_CONCURRENT_INGESTS
   ) {
     this.eccodesImage = eccodesImage ?? DEFAULT_ECCODES_IMAGE
+  }
+
+  // Each non-hidden subdirectory of rootDirectory is a source. Its name is
+  // the provider ID suffix and display name; caches mirror it under cacheRoot.
+  private discoverSources(): SourceConfig[] {
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(this.rootDirectory, { withFileTypes: true })
+    } catch {
+      throw new Error(`Cannot read root directory: ${this.rootDirectory}`)
+    }
+    return entries
+      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+      .map(e => ({
+        name: e.name,
+        directory: path.join(this.rootDirectory, e.name),
+        cacheDirectory: path.join(this.cacheRoot, e.name),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name))
   }
 
   async start(scanIntervalMinutes = 5): Promise<void> {
@@ -153,7 +173,17 @@ export class GribStore {
 
   private async scanAll(): Promise<void> {
     const summary: ScanSummary = { sources: [], errors: [] }
-    for (const source of this.sources) {
+    let sources: SourceConfig[]
+    try {
+      sources = this.discoverSources()
+    } catch (err) {
+      summary.errors.push(String(err))
+      this.log(String(err))
+      this.onScan?.(summary)
+      return
+    }
+
+    for (const source of sources) {
       try {
         const slices = await this.scanSource(source)
         summary.sources.push({ name: source.name, slices })
@@ -164,13 +194,32 @@ export class GribStore {
         summary.sources.push({ name: source.name, slices: this.index.get(source.name)?.length ?? 0 })
       }
     }
+
+    // Drop index entries and cache trees of sources whose directory is gone
+    const names = new Set(sources.map(s => s.name))
+    for (const name of [...this.index.keys()]) {
+      if (!names.has(name)) {
+        this.index.delete(name)
+        this.log(`Source "${name}" removed`)
+      }
+    }
+    try {
+      for (const e of fs.readdirSync(this.cacheRoot, { withFileTypes: true })) {
+        if (e.isDirectory() && !names.has(e.name)) {
+          this.log(`Purging orphan cache tree: ${e.name}`)
+          fs.promises.rm(path.join(this.cacheRoot, e.name), { recursive: true, force: true })
+            .catch(err => this.log(`Cannot purge cache tree ${e.name}: ${err}`))
+        }
+      }
+    } catch { /* cacheRoot may not exist yet */ }
+
     this.onScan?.(summary)
   }
 
   // Returns the number of indexed slices for the source.
   private async scanSource(source: SourceConfig): Promise<number> {
     const gribDir  = source.directory
-    const cacheDir = source.cacheDirectory ?? gribDir
+    const cacheDir = source.cacheDirectory
 
     // List GRIB files → map basename → full path
     let gribFiles: string[]

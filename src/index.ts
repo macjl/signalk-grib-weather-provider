@@ -1,3 +1,4 @@
+import * as path from 'path'
 import { Plugin, ServerAPI } from '@signalk/server-api'
 import { WeatherProviderRegistry } from '@signalk/server-api'
 import { GribStore, ScanSummary } from './grib-store'
@@ -10,46 +11,28 @@ const PLUGIN_ID = 'signalk-grib-weather-provider'
 
 const CONFIG_SCHEMA = {
   type: 'object',
+  required: ['rootDirectory'],
   properties: {
-    sources: {
-      type: 'array',
-      title: 'GRIB Sources',
+    rootDirectory: {
+      type: 'string',
+      title: 'GRIB root directory',
       description:
-        'Each source registers as a separate weather provider in SignalK. ' +
-        'The name must be unique and URL-safe (letters, digits, hyphens).',
-      items: {
-        type: 'object',
-        required: ['name', 'directory'],
-        properties: {
-          name: {
-            type: 'string',
-            title: 'Source ID',
-            description:
-              'Unique identifier — becomes the provider ID suffix ' +
-              '(e.g. "arome" → provider "signalk-grib-weather-provider:arome")',
-          },
-          label: {
-            type: 'string',
-            title: 'Display name',
-            description: 'Human-readable name shown in the source selector (optional, defaults to name)',
-          },
-          directory: {
-            type: 'string',
-            title: 'GRIB directory',
-            description: 'Absolute path to the directory containing GRIB2 files',
-          },
-          cacheDirectory: {
-            type: 'string',
-            title: 'Cache directory (optional)',
-            description: 'Where .gribcache files are stored. Defaults to the GRIB directory.',
-          },
-        },
-      },
+        'Every subdirectory is served as a weather provider named after the ' +
+        'directory (e.g. <root>/gfs-0p25 → provider "…:gfs-0p25"). Drop GRIB2 ' +
+        'files in a subdirectory — or let signalk-grib-downloader manage them. ' +
+        'Must be reachable from the container runtime.',
+    },
+    cacheRoot: {
+      type: 'string',
+      title: 'Cache root directory (optional)',
+      description:
+        'Where .gribcache trees are stored, mirroring the source names. ' +
+        'Defaults to the plugin data directory. Keep it outside the GRIB root.',
     },
     scanIntervalMinutes: {
       type: 'number',
       title: 'Scan interval (minutes)',
-      description: 'How often to check for new GRIB files',
+      description: 'How often to discover sources and check for new GRIB files',
       default: 5,
       minimum: 1,
     },
@@ -73,7 +56,7 @@ const CONFIG_SCHEMA = {
 
 module.exports = (server: PluginApp): Plugin => {
   let store: GribStore | null = null
-  let registeredIds: string[] = []
+  let registered = new Set<string>()
 
   const plugin: Plugin = {
     id: PLUGIN_ID,
@@ -81,7 +64,7 @@ module.exports = (server: PluginApp): Plugin => {
     schema: () => CONFIG_SCHEMA,
 
     start: (options: PluginSettings) => {
-      // Access the weather API directly to support custom provider IDs per source.
+      // Access the weather API directly to support one provider per source.
       const weatherApi = (server as any).weatherApi
       if (!weatherApi?.register) {
         server.setPluginError('Weather API not available — upgrade SignalK server to >=2.x')
@@ -96,23 +79,52 @@ module.exports = (server: PluginApp): Plugin => {
         return
       }
 
-      const sources = options.sources ?? []
-      if (sources.length === 0) {
-        server.setPluginError('No sources configured')
+      if (!options.rootDirectory) {
+        server.setPluginError('rootDirectory is not configured')
         return
+      }
+      const cacheRoot = options.cacheRoot || path.join(server.getDataDirPath(), 'cache')
+
+      // Register/unregister weather providers to follow discovered sources.
+      const syncProviders = (names: string[]) => {
+        for (const name of names) {
+          if (!registered.has(name)) {
+            const providerId = `${PLUGIN_ID}:${name}`
+            weatherApi.register(providerId, {
+              name,
+              methods: {
+                getObservations: async () => [],
+                getForecasts: (position: any, type: any, opts: any) =>
+                  store!.getForecastsForSource(name, position, type, opts ?? {}),
+                getWarnings: async () => [],
+              },
+            })
+            registered.add(name)
+            server.debug(`Registered weather provider: ${providerId}`)
+          }
+        }
+        for (const name of [...registered]) {
+          if (!names.includes(name)) {
+            weatherApi.unRegister(`${PLUGIN_ID}:${name}`)
+            registered.delete(name)
+            server.debug(`Unregistered weather provider: ${PLUGIN_ID}:${name}`)
+          }
+        }
       }
 
       const onScan = (summary: ScanSummary) => {
+        syncProviders(summary.sources.map(s => s.name))
         const parts = summary.sources.map(s => `${s.name}: ${s.slices} slice(s)`)
         if (summary.errors.length > 0) {
-          server.setPluginStatus(`${parts.join(', ')} — ${summary.errors.length} error(s), see debug log`)
+          server.setPluginStatus(`${parts.join(', ') || 'no sources'} — ${summary.errors.length} error(s), see debug log`)
         } else {
-          server.setPluginStatus(parts.join(', '))
+          server.setPluginStatus(parts.join(', ') || `no sources found in ${options.rootDirectory}`)
         }
       }
 
       store = new GribStore(
-        sources,
+        options.rootDirectory,
+        cacheRoot,
         (msg: string) => server.debug(msg),
         options.eccodesImage,
         onScan,
@@ -130,37 +142,14 @@ module.exports = (server: PluginApp): Plugin => {
           server.setPluginError(`Startup error: ${err}`)
         })
       })
-
-      // Register each source as an independent weather provider.
-      // Provider ID: "signalk-grib-weather-provider:<source.name>"
-      registeredIds = []
-      for (const source of sources) {
-        const providerId  = `${PLUGIN_ID}:${source.name}`
-        const displayName = source.label ?? source.name
-        const sourceName  = source.name  // captured for closure
-
-        weatherApi.register(providerId, {
-          name: displayName,
-          methods: {
-            getObservations: async () => [],
-            getForecasts: (position: any, type: any, opts: any) =>
-              store!.getForecastsForSource(sourceName, position, type, opts ?? {}),
-            getWarnings: async () => [],
-          },
-        })
-
-        registeredIds.push(providerId)
-        server.debug(`Registered weather provider: ${providerId} ("${displayName}")`)
-      }
     },
 
     stop: () => {
       const weatherApi = (server as any).weatherApi
-      for (const id of registeredIds) {
-        weatherApi?.unRegister(id)
-        server.debug(`Unregistered weather provider: ${id}`)
+      for (const name of registered) {
+        weatherApi?.unRegister(`${PLUGIN_ID}:${name}`)
       }
-      registeredIds = []
+      registered.clear()
       store?.stop()
       store = null
     },

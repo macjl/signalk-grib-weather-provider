@@ -1,15 +1,17 @@
+// A source is a subdirectory of rootDirectory, discovered at scan time.
+// Its directory name is the provider ID suffix and display name.
 export interface SourceConfig {
-  name: string         // unique ID — used as provider ID suffix and index key
-  label?: string       // human-readable display name (defaults to name)
-  directory: string    // absolute path to directory containing GRIB2 files
-  cacheDirectory?: string  // where .gribcache files are written; defaults to `directory`
+  name: string         // directory name — provider ID suffix and index key
+  directory: string    // <rootDirectory>/<name>
+  cacheDirectory: string  // <cacheRoot>/<name>
 }
 
 export interface PluginSettings {
-  sources: SourceConfig[]
+  rootDirectory?: string         // parent directory of all GRIB sources
+  cacheRoot?: string             // where .gribcache trees live (default: plugin data dir)
   scanIntervalMinutes?: number
   maxConcurrentIngests?: number  // cap on simultaneous GRIB→cache container jobs
-  eccodesImage?: string  // Docker image for the eccodes container
+  eccodesImage?: string          // Docker image for the eccodes container
 }
 
 export interface GridMeta {

@@ -46,20 +46,24 @@ files whose source GRIB has been deleted are purged automatically.
 
 ## Configuration
 
-In the plugin settings:
+Sources are **discovered**: every non-hidden subdirectory of the configured
+root is served as a weather provider named after the directory
+(`<root>/gfs-0p25` → provider `signalk-grib-weather-provider:gfs-0p25`).
+Create a directory, drop GRIB2 files in it, done — or let
+[signalk-grib-downloader](https://github.com/macjl/signalk-grib-downloader)
+manage the directories for you (it derives names as `<model>-<resolution>`).
 
 | Option | Description |
 |---|---|
-| **Sources** | One entry per GRIB directory. Each registers as provider `signalk-grib-weather-provider:<source-id>`. |
-| Source ID | Unique, URL-safe identifier (e.g. `gfs-025`). |
-| Display name | Label shown in source selectors (optional). |
-| GRIB directory | Absolute path to the directory containing the GRIB2 files. Must be reachable from the container runtime (inside the Signal K data directory, or bind-mounted). |
-| Cache directory | Where `.gribcache` files are written (optional, defaults to the GRIB directory). |
-| **Scan interval** | How often to look for new files (default 5 min). |
+| **GRIB root directory** | Parent directory of all sources. Must be reachable from the container runtime (inside the Signal K data directory, or bind-mounted). |
+| Cache root (optional) | Where `.gribcache` trees are written, mirroring source names. Defaults to the plugin data directory. Keep it outside the GRIB root. |
+| **Scan interval** | How often to discover sources and look for new files (default 5 min). |
+| Max concurrent ingests | Cap on simultaneous conversion containers (default 2). |
 | **Eccodes image** | Override the conversion image (default `ghcr.io/macjl/signalk-grib-eccodes:latest`). |
 
-Drop GRIB files into the directory — they are picked up at the next scan. A GRIB
-file that fails to convert is retried at most 5 times, then ignored until restart.
+New files are picked up at the next scan; sources appear and disappear with
+their directories, without restarting. A GRIB file that fails to convert is
+retried at most 5 times, then ignored until restart.
 
 ## Models
 
