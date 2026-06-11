@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.2.0] — Unreleased
+## [0.2.0] — 2026-06-11
 
 ### Changed (breaking)
 - Sources are now **discovered** from a single `rootDirectory`: every subdirectory is served as a provider named after the directory. The per-source configuration array (`sources`) is gone — replace it with `rootDirectory` (and optionally `cacheRoot`)
