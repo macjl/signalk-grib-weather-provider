@@ -1,3 +1,4 @@
+import * as os from 'os'
 import * as path from 'path'
 import { Plugin, ServerAPI } from '@signalk/server-api'
 import { WeatherProviderRegistry } from '@signalk/server-api'
@@ -9,9 +10,15 @@ interface PluginApp extends ServerAPI, WeatherProviderRegistry {}
 
 const PLUGIN_ID = 'signalk-grib-weather-provider'
 
-const CONFIG_SCHEMA = {
+// "~/gribs" is not expanded by Node — resolve it ourselves.
+function expandHome(p: string): string {
+  if (p === '~') return os.homedir()
+  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2))
+  return p
+}
+
+const buildSchema = (defaultRoot: string) => ({
   type: 'object',
-  required: ['rootDirectory'],
   properties: {
     rootDirectory: {
       type: 'string',
@@ -20,7 +27,10 @@ const CONFIG_SCHEMA = {
         'Every subdirectory is served as a weather provider named after the ' +
         'directory (e.g. <root>/gfs-0p25 → provider "…:gfs-0p25"). Drop GRIB2 ' +
         'files in a subdirectory — or let signalk-grib-downloader manage them. ' +
-        'Must be reachable from the container runtime.',
+        'When SignalK runs in a container, the path must live inside a ' +
+        'mounted volume — the default (inside the SignalK data directory) ' +
+        'always works. "~" is expanded.',
+      default: defaultRoot,
     },
     cacheRoot: {
       type: 'string',
@@ -52,16 +62,18 @@ const CONFIG_SCHEMA = {
       default: DEFAULT_ECCODES_IMAGE,
     },
   },
-}
+})
 
 module.exports = (server: PluginApp): Plugin => {
   let store: GribStore | null = null
   let registered = new Set<string>()
 
+  const defaultRoot = () => path.resolve(server.getDataDirPath(), '..', '..', 'gribs')
+
   const plugin: Plugin = {
     id: PLUGIN_ID,
     name: 'GRIB Weather Provider',
-    schema: () => CONFIG_SCHEMA,
+    schema: () => buildSchema(defaultRoot()),
 
     start: (options: PluginSettings) => {
       // Access the weather API directly to support one provider per source.
@@ -79,11 +91,8 @@ module.exports = (server: PluginApp): Plugin => {
         return
       }
 
-      if (!options.rootDirectory) {
-        server.setPluginError('rootDirectory is not configured')
-        return
-      }
-      const cacheRoot = options.cacheRoot || path.join(server.getDataDirPath(), 'cache')
+      const rootDirectory = expandHome(options.rootDirectory || defaultRoot())
+      const cacheRoot = expandHome(options.cacheRoot || path.join(server.getDataDirPath(), 'cache'))
 
       // Register/unregister weather providers to follow discovered sources.
       const syncProviders = (names: string[]) => {
@@ -118,12 +127,12 @@ module.exports = (server: PluginApp): Plugin => {
         if (summary.errors.length > 0) {
           server.setPluginStatus(`${parts.join(', ') || 'no sources'} — ${summary.errors.length} error(s), see debug log`)
         } else {
-          server.setPluginStatus(parts.join(', ') || `no sources found in ${options.rootDirectory}`)
+          server.setPluginStatus(parts.join(', ') || `no sources found in ${rootDirectory}`)
         }
       }
 
       store = new GribStore(
-        options.rootDirectory,
+        rootDirectory,
         cacheRoot,
         (msg: string) => server.debug(msg),
         options.eccodesImage,

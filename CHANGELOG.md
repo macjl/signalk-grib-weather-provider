@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] — 2026-06-11
+
+### Fixed
+- `~` is now expanded in `rootDirectory` and `cacheRoot`
+- `rootDirectory` gets a portable default (`<signalk-config>/gribs`) that is always reachable from the container runtime, containerized or not
+
 ## [0.2.0] — 2026-06-11
 
 ### Changed (breaking)
