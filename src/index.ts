@@ -27,9 +27,9 @@ const buildSchema = (defaultRoot: string) => ({
         'Every subdirectory is served as a weather provider named after the ' +
         'directory (e.g. <root>/gfs-0p25 → provider "…:gfs-0p25"). Drop GRIB2 ' +
         'files in a subdirectory — or let signalk-grib-downloader manage them. ' +
-        'When SignalK runs in a container, the path must live inside a ' +
-        'mounted volume — the default (inside the SignalK data directory) ' +
-        'always works. "~" is expanded.',
+        '"~" is expanded. When SignalK runs in a container, the path must ' +
+        'live inside a mounted volume — the default (under ~/.signalk) ' +
+        'always works.',
       default: defaultRoot,
     },
     cacheRoot: {
@@ -68,12 +68,12 @@ module.exports = (server: PluginApp): Plugin => {
   let store: GribStore | null = null
   let registered = new Set<string>()
 
-  const defaultRoot = () => path.resolve(server.getDataDirPath(), '..', '..', 'gribs')
+  const DEFAULT_ROOT = '~/.signalk/gribs'
 
   const plugin: Plugin = {
     id: PLUGIN_ID,
     name: 'GRIB Weather Provider',
-    schema: () => buildSchema(defaultRoot()),
+    schema: () => buildSchema(DEFAULT_ROOT),
 
     start: (options: PluginSettings) => {
       // Access the weather API directly to support one provider per source.
@@ -91,7 +91,7 @@ module.exports = (server: PluginApp): Plugin => {
         return
       }
 
-      const rootDirectory = expandHome(options.rootDirectory || defaultRoot())
+      const rootDirectory = expandHome(options.rootDirectory || DEFAULT_ROOT)
       const cacheRoot = expandHome(options.cacheRoot || path.join(server.getDataDirPath(), 'cache'))
 
       // Register/unregister weather providers to follow discovered sources.

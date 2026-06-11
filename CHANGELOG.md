@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2] — 2026-06-11
+
+### Changed
+- `rootDirectory` defaults to `~/.signalk/gribs` — readable, and inside the mounted volume on containerized installs
+
 ## [0.2.1] — 2026-06-11
 
 ### Fixed
