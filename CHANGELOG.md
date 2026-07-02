@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] — 2026-07-02
+
+### Changed
+- Updated npm development dependencies, GitHub Actions, and the eccodes container base image
+- Replaced the npm publish workflow with the common release-driven publish workflow
+
+### Fixed
+- Explicitly include Node.js types in the TypeScript configuration for TypeScript 6 compatibility
+
 ## [0.2.2] — 2026-06-11
 
 ### Changed
