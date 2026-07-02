@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 ENV DEBIAN_FRONTEND=noninteractive
 # python3-numpy from distro (ARM64 wheel, no build); eccodes bundles its own C library
 RUN apt-get update -qq \
