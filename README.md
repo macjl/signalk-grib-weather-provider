@@ -9,16 +9,16 @@ side by side, and pick one from any Weather API client (such as
 ## How it works
 
 ```
-GRIB2 files ──▶ eccodes container job ──▶ .gribcache files ──▶ Weather API
- (your dir)      (one-shot Docker run)     (one per forecast hour)   (point forecasts)
+GRIB2 files ──▶ [Native Python] OR [Docker] ──▶ .gribcache files ──▶ Weather API
+ (your dir)      (if available)  (fallback)      (one per forecast hour)   (point forecasts)
 ```
 
 1. The plugin periodically scans each configured directory for GRIB2 files
    (`.grb2`, `.grib2`, `.grb`, `.grib`).
-2. New files are converted by a short-lived container job (Python +
-   [ecCodes](https://confluence.ecmwf.int/display/ECC)) into compact binary
-   `.gribcache` files — **one per validity time**, so multi-timestep GRIB files are
-   fully supported.
+2. New files are converted using the **native Python ecCodes library** if available
+   (requires `python3` and `eccodes` Python module), otherwise falls back to a
+   Docker container job. Both methods produce compact binary `.gribcache` files —
+   **one per validity time**, so multi-timestep GRIB files are fully supported.
 3. Forecast queries are answered by reading only the 4 grid points surrounding the
    requested position (bilinear interpolation) — nothing is kept in RAM.
 
@@ -33,16 +33,28 @@ files whose source GRIB has been deleted are purged automatically.
 ## Requirements
 
 - Signal K server ≥ 2.x (Weather API)
-- The [signalk-container](https://github.com/dirkwa/signalk-container) plugin with a
-  working container runtime (Docker or Podman) — declared via `signalk.requires`,
-  so the App Store installs it automatically alongside this plugin
+
+### GRIB Processing (one of the following)
+
+**Option A: Native Python (recommended, no Docker required)**
+- Python 3.x
+- ECMWF ecCodes Python bindings: `pip install eccodes`
+  - Or install via system package: `apt install python3-eccodes` (Ubuntu/Debian)
+  - Or: `brew install eccodes` (macOS)
+
+**Option B: Docker (fallback)**
+- The [signalk-container](https://github.com/dirkwa/signalk-container) plugin
+- A working container runtime (Docker or Podman)
 - The eccodes conversion image `ghcr.io/macjl/signalk-grib-eccodes:latest`
-  (multi-arch amd64/arm64). It is pulled automatically on first use; you can also
+  (multi-arch amd64/arm64), pulled automatically on first use. You can also
   build it yourself from [`eccodes-container/`](eccodes-container/):
 
   ```sh
   docker build -t ghcr.io/macjl/signalk-grib-eccodes:latest eccodes-container/
   ```
+
+The plugin automatically detects which mode is available at startup and uses
+native Python when possible, falling back to Docker when needed.
 
 ## Configuration
 
@@ -55,7 +67,7 @@ manage the directories for you (it derives names as `<model>-<resolution>`).
 
 | Option | Description |
 |---|---|
-| **GRIB root directory** | Parent directory of all sources. Must be reachable from the container runtime (inside the Signal K data directory, or bind-mounted). |
+| **GRIB root directory** | Parent directory of all sources. When using Docker, must be reachable from the container runtime (inside the Signal K data directory, or bind-mounted). |
 | Cache root (optional) | Where `.gribcache` trees are written, mirroring source names. Defaults to the plugin data directory. Keep it outside the GRIB root. |
 | **Scan interval** | How often to discover sources and look for new files (default 5 min). |
 | Max concurrent ingests | Cap on simultaneous conversion containers (default 2). |

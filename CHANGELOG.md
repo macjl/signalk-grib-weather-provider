@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Native Python ecCodes support: GRIB files can now be processed using Python + eccodes module without requiring Docker
+- Automatic detection of native ecCodes availability at startup with fallback to Docker
+- Optional `signalk-container` dependency: plugin can now run in native-only mode when Docker is unavailable
+
+### Changed
+- `signalk-container` is now optional (removed from `signalk.requires`)
+- Plugin startup handles both container and container-less scenarios gracefully
+- GRIB processing prioritizes native Python when available, falls back to Docker container
+
 ## [0.2.3] — 2026-07-02
 
 ### Changed

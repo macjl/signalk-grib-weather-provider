@@ -1,5 +1,6 @@
 import * as path from 'path'
 import * as fs from 'fs'
+import { hasNativeEcCodes, ingestGribNative } from './ingest-native'
 
 const PLUGIN_ID = 'signalk-grib-weather-provider'
 const DEFAULT_IMAGE = 'ghcr.io/macjl/signalk-grib-eccodes:latest'
@@ -9,6 +10,20 @@ const MAX_INGEST_ATTEMPTS = 5
 const pending = new Set<string>()
 // Failed ingest attempts per GRIB path — abandoned after MAX_INGEST_ATTEMPTS.
 const failures = new Map<string, number>()
+
+// Native ecCodes availability cache - checked once at startup
+let nativeAvailable: boolean | null = null
+
+/**
+ * Check if native ecCodes is available and cache the result.
+ * Call this at startup to populate the cache.
+ */
+export async function checkNativeEcCodes(log: (m: string) => void): Promise<boolean> {
+  if (nativeAvailable === null) {
+    nativeAvailable = await hasNativeEcCodes(log)
+  }
+  return nativeAvailable
+}
 
 function containerManager(): any {
   return (globalThis as any).__signalk_containerManager ?? null
@@ -38,6 +53,7 @@ export async function ensureImage(image: string, log: (m: string) => void): Prom
 // Ingest a GRIB file: produces one .gribcache per validity time in cacheDir.
 // Returns true on success, false if skipped (in progress or too many failures).
 // Throws on failure (counted against MAX_INGEST_ATTEMPTS).
+// Tries native ecCodes first (Python + eccodes module), falls back to Docker.
 export async function ingestGrib(
   gribPath: string,
   cacheDir: string,
@@ -61,6 +77,23 @@ export async function ingestGrib(
   pending.add(gribPath)
   try {
     log(`Ingesting ${path.basename(gribPath)} …`)
+
+    // Try native ecCodes first if available
+    if (nativeAvailable !== null && nativeAvailable) {
+      try {
+        log(`Using native ecCodes (Python)`)
+        const success = await ingestGribNative(gribPath, cacheDir, log)
+        if (success) {
+          failures.delete(gribPath)
+          return true
+        }
+        // If native fails, fall through to Docker
+        log(`Native ingest failed, falling back to Docker`)
+      } catch (nativeErr: any) {
+        log(`Native ingest error: ${nativeErr.message}, falling back to Docker`)
+        // Fall through to Docker
+      }
+    }
 
     // Resolve GRIB directory for container volume mounting
     const gribDir = path.dirname(gribPath)

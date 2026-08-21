@@ -4,7 +4,7 @@ import { Position, WeatherData, WeatherForecastType, WeatherReqParams } from '@s
 import { CacheEntry, SourceConfig, TimeSlice } from './types'
 import { readCacheHeader, queryAtPosition } from './grib-cache'
 import { toWeatherData } from './weather-mapper'
-import { ingestGrib, gribBasename, ensureImage, CACHE_FILE_RE, DEFAULT_ECCODES_IMAGE } from './ingest-manager'
+import { ingestGrib, gribBasename, ensureImage, CACHE_FILE_RE, DEFAULT_ECCODES_IMAGE, checkNativeEcCodes } from './ingest-manager'
 
 const GRIB_EXTENSIONS = new Set(['.grb2', '.grib2', '.grb', '.grib'])
 const DEFAULT_MAX_CONCURRENT_INGESTS = 2
@@ -65,9 +65,17 @@ export class GribStore {
   }
 
   async start(scanIntervalMinutes = 5): Promise<void> {
-    await ensureImage(this.eccodesImage, this.log).catch(err =>
-      this.log(`Warning: could not verify eccodes image — ${err}`)
-    )
+    // Check for native ecCodes first
+    const nativeAvailable = await checkNativeEcCodes(this.log)
+    if (nativeAvailable) {
+      this.log('Native ecCodes available, will use Python + eccodes for GRIB processing')
+    } else {
+      this.log('Native ecCodes not available, will use Docker container for GRIB processing')
+      // Still try to pull Docker image
+      await ensureImage(this.eccodesImage, this.log).catch(err =>
+        this.log(`Warning: could not verify eccodes image — ${err}`)
+      )
+    }
     await this.scanAll()
     this.scanTimer = setInterval(
       () => this.scanAll().catch(err => this.log(`Scan error: ${err}`)),

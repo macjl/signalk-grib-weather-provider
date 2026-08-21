@@ -84,12 +84,7 @@ module.exports = (server: PluginApp): Plugin => {
       }
 
       const containers = (globalThis as any).__signalk_containerManager
-      if (!containers) {
-        server.setPluginError(
-          'signalk-container plugin is required but not installed or not running'
-        )
-        return
-      }
+      const hasContainers = !!containers
 
       const rootDirectory = expandHome(options.rootDirectory || DEFAULT_ROOT)
       const cacheRoot = expandHome(options.cacheRoot || path.join(server.getDataDirPath(), 'cache'))
@@ -140,17 +135,31 @@ module.exports = (server: PluginApp): Plugin => {
         options.maxConcurrentIngests ?? 2
       )
 
-      server.setPluginStatus('Waiting for container runtime …')
-      containers.whenReady().then(() => {
-        if (!containers.getRuntime()) {
-          server.setPluginError('No container runtime detected (Docker/Podman not available)')
-          return
-        }
-        server.setPluginStatus('Scanning GRIB directories …')
+      server.setPluginStatus('Starting up …')
+      
+      // If we have containers, wait for them to be ready
+      if (hasContainers) {
+        containers.whenReady().then(() => {
+          if (!containers.getRuntime()) {
+            server.setPluginStatus('Container runtime not available, native mode only (requires Python + eccodes)')
+          } else {
+            server.setPluginStatus('Scanning GRIB directories …')
+          }
+          store!.start(options.scanIntervalMinutes ?? 5).catch((err: unknown) => {
+            server.setPluginError(`Startup error: ${err}`)
+          })
+        }).catch((err: unknown) => {
+          server.setPluginStatus('Container manager error, native mode only (requires Python + eccodes)')
+          store!.start(options.scanIntervalMinutes ?? 5).catch((err: unknown) => {
+            server.setPluginError(`Startup error: ${err}`)
+          })
+        })
+      } else {
+        // No containers - start anyway (native mode only)
         store!.start(options.scanIntervalMinutes ?? 5).catch((err: unknown) => {
           server.setPluginError(`Startup error: ${err}`)
         })
-      })
+      }
     },
 
     stop: () => {
