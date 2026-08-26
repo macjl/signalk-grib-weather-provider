@@ -39,7 +39,7 @@
     "CHANGELOG.md"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "signalk-plugin-enabled-by-default": false,
   "signalk": {
