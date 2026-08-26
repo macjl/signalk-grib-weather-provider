@@ -10,8 +10,7 @@ export interface PluginSettings {
   rootDirectory?: string         // parent directory of all GRIB sources
   cacheRoot?: string             // where .gribcache trees live (default: plugin data dir)
   scanIntervalMinutes?: number
-  maxConcurrentIngests?: number  // cap on simultaneous GRIB→cache container jobs
-  eccodesImage?: string          // Docker image for the eccodes container
+  maxConcurrentIngests?: number  // cap on simultaneous GRIB→cache conversions
 }
 
 export interface GridMeta {
