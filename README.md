@@ -9,16 +9,18 @@ side by side, and pick one from any Weather API client (such as
 ## How it works
 
 ```
-GRIB2 files ──▶ eccodes container job ──▶ .gribcache files ──▶ Weather API
- (your dir)      (one-shot Docker run)     (one per forecast hour)   (point forecasts)
+GRIB2 files ──▶ WebAssembly ecCodes ──▶ .gribcache files ──▶ Weather API
+ (your dir)    (in-process conversion)    (one per forecast hour)   (point forecasts)
 ```
 
 1. The plugin periodically scans each configured directory for GRIB2 files
    (`.grb2`, `.grib2`, `.grb`, `.grib`).
-2. New files are converted by a short-lived container job (Python +
-   [ecCodes](https://confluence.ecmwf.int/display/ECC)) into compact binary
-   `.gribcache` files — **one per validity time**, so multi-timestep GRIB files are
-   fully supported.
+2. New files are converted **in-process** by a WebAssembly build of
+   [ecCodes](https://confluence.ecmwf.int/display/ECC)
+   ([`@meri-imperiumi/eccodes-wasm`](https://github.com/meri-imperiumi/eccodes-wasm))
+   into compact binary `.gribcache` files — **one per validity time**, so
+   multi-timestep GRIB files are fully supported. No Docker, no containers, no
+   external image to pull — the converter ships as a normal npm dependency.
 3. Forecast queries are answered by reading only the 4 grid points surrounding the
    requested position (bilinear interpolation) — nothing is kept in RAM.
 
@@ -33,16 +35,11 @@ files whose source GRIB has been deleted are purged automatically.
 ## Requirements
 
 - Signal K server ≥ 2.x (Weather API)
-- The [signalk-container](https://github.com/dirkwa/signalk-container) plugin with a
-  working container runtime (Docker or Podman) — declared via `signalk.requires`,
-  so the App Store installs it automatically alongside this plugin
-- The eccodes conversion image `ghcr.io/macjl/signalk-grib-eccodes:latest`
-  (multi-arch amd64/arm64). It is pulled automatically on first use; you can also
-  build it yourself from [`eccodes-container/`](eccodes-container/):
+- Node.js ≥ 24 (the WebAssembly build of ecCodes uses the 64-bit memory feature,
+  available from Node 24). On older runtimes the plugin cannot convert GRIB files —
+  upgrade your Signal K server's Node.
 
-  ```sh
-  docker build -t ghcr.io/macjl/signalk-grib-eccodes:latest eccodes-container/
-  ```
+No other plugin, container runtime, or external image is required.
 
 ## Configuration
 
@@ -55,11 +52,10 @@ manage the directories for you (it derives names as `<model>-<resolution>`).
 
 | Option | Description |
 |---|---|
-| **GRIB root directory** | Parent directory of all sources. Must be reachable from the container runtime (inside the Signal K data directory, or bind-mounted). |
+| **GRIB root directory** | Parent directory of all sources. `~` is expanded. |
 | Cache root (optional) | Where `.gribcache` trees are written, mirroring source names. Defaults to the plugin data directory. Keep it outside the GRIB root. |
 | **Scan interval** | How often to discover sources and look for new files (default 5 min). |
-| Max concurrent ingests | Cap on simultaneous conversion containers (default 2). |
-| **Eccodes image** | Override the conversion image (default `ghcr.io/macjl/signalk-grib-eccodes:latest`). |
+| Max concurrent ingests | Cap on simultaneous in-process conversions (default 2). Each conversion loads full model grids into memory — keep low on small systems. |
 
 New files are picked up at the next scan; sources appear and disappear with
 their directories, without restarting. A GRIB file that fails to convert is

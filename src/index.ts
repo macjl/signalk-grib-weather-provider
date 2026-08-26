@@ -4,7 +4,6 @@ import { Plugin, ServerAPI } from '@signalk/server-api'
 import { WeatherProviderRegistry } from '@signalk/server-api'
 import { GribStore, ScanSummary } from './grib-store'
 import { PluginSettings } from './types'
-import { DEFAULT_ECCODES_IMAGE } from './ingest-manager'
 
 interface PluginApp extends ServerAPI, WeatherProviderRegistry {}
 
@@ -27,9 +26,7 @@ const buildSchema = (defaultRoot: string) => ({
         'Every subdirectory is served as a weather provider named after the ' +
         'directory (e.g. <root>/gfs-0p25 → provider "…:gfs-0p25"). Drop GRIB2 ' +
         'files in a subdirectory — or let signalk-grib-downloader manage them. ' +
-        '"~" is expanded. When SignalK runs in a container, the path must ' +
-        'live inside a mounted volume — the default (under ~/.signalk) ' +
-        'always works.',
+        '"~" is expanded.',
       default: defaultRoot,
     },
     cacheRoot: {
@@ -50,16 +47,10 @@ const buildSchema = (defaultRoot: string) => ({
       type: 'number',
       title: 'Max concurrent ingest jobs',
       description:
-        'Maximum number of GRIB→cache conversion containers running at once. ' +
+        'Maximum number of GRIB→cache conversions running at once. ' +
         'Each job loads full model grids in memory — keep low on small systems.',
       default: 2,
       minimum: 1,
-    },
-    eccodesImage: {
-      type: 'string',
-      title: 'Eccodes container image',
-      description: `Docker image used for GRIB→cache conversion. Default: ${DEFAULT_ECCODES_IMAGE}`,
-      default: DEFAULT_ECCODES_IMAGE,
     },
   },
 })
@@ -80,14 +71,6 @@ module.exports = (server: PluginApp): Plugin => {
       const weatherApi = (server as any).weatherApi
       if (!weatherApi?.register) {
         server.setPluginError('Weather API not available — upgrade SignalK server to >=2.x')
-        return
-      }
-
-      const containers = (globalThis as any).__signalk_containerManager
-      if (!containers) {
-        server.setPluginError(
-          'signalk-container plugin is required but not installed or not running'
-        )
         return
       }
 
@@ -135,21 +118,13 @@ module.exports = (server: PluginApp): Plugin => {
         rootDirectory,
         cacheRoot,
         (msg: string) => server.debug(msg),
-        options.eccodesImage,
         onScan,
         options.maxConcurrentIngests ?? 2
       )
 
-      server.setPluginStatus('Waiting for container runtime …')
-      containers.whenReady().then(() => {
-        if (!containers.getRuntime()) {
-          server.setPluginError('No container runtime detected (Docker/Podman not available)')
-          return
-        }
-        server.setPluginStatus('Scanning GRIB directories …')
-        store!.start(options.scanIntervalMinutes ?? 5).catch((err: unknown) => {
-          server.setPluginError(`Startup error: ${err}`)
-        })
+      server.setPluginStatus('Starting up …')
+      store.start(options.scanIntervalMinutes ?? 5).catch((err: unknown) => {
+        server.setPluginError(`Startup error: ${err}`)
       })
     },
 

@@ -4,7 +4,7 @@ import { Position, WeatherData, WeatherForecastType, WeatherReqParams } from '@s
 import { CacheEntry, SourceConfig, TimeSlice } from './types'
 import { readCacheHeader, queryAtPosition } from './grib-cache'
 import { toWeatherData } from './weather-mapper'
-import { ingestGrib, gribBasename, ensureImage, CACHE_FILE_RE, DEFAULT_ECCODES_IMAGE } from './ingest-manager'
+import { ingestGrib, gribBasename, CACHE_FILE_RE } from './ingest-manager'
 
 const GRIB_EXTENSIONS = new Set(['.grb2', '.grib2', '.grb', '.grib'])
 const DEFAULT_MAX_CONCURRENT_INGESTS = 2
@@ -15,8 +15,8 @@ export interface ScanSummary {
 }
 
 // Run fn over items with at most `limit` concurrent executions.
-// Each ingest spawns a container loading full grids into RAM — unbounded
-// parallelism can exhaust the host (tens of GRIB files arrive per run).
+// Each ingest loads full model grids in memory — unbounded parallelism can
+// exhaust the host (tens of GRIB files arrive per run).
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   const queue = [...items]
   const workers = Array.from({ length: Math.max(1, Math.min(limit, queue.length)) }, async () => {
@@ -32,18 +32,14 @@ export class GribStore {
   // Per-source list of indexed .gribcache entries, deduplicated and sorted ascending by validAt
   private index = new Map<string, CacheEntry[]>()
   private scanTimer: ReturnType<typeof setInterval> | null = null
-  private eccodesImage: string
 
   constructor(
     private rootDirectory: string,
     private cacheRoot: string,
     private log: (msg: string) => void,
-    eccodesImage?: string,
     private onScan?: (summary: ScanSummary) => void,
     private maxConcurrentIngests: number = DEFAULT_MAX_CONCURRENT_INGESTS
-  ) {
-    this.eccodesImage = eccodesImage ?? DEFAULT_ECCODES_IMAGE
-  }
+  ) {}
 
   // Each non-hidden subdirectory of rootDirectory is a source. Its name is
   // the provider ID suffix and display name; caches mirror it under cacheRoot.
@@ -65,9 +61,6 @@ export class GribStore {
   }
 
   async start(scanIntervalMinutes = 5): Promise<void> {
-    await ensureImage(this.eccodesImage, this.log).catch(err =>
-      this.log(`Warning: could not verify eccodes image — ${err}`)
-    )
     await this.scanAll()
     this.scanTimer = setInterval(
       () => this.scanAll().catch(err => this.log(`Scan error: ${err}`)),
@@ -256,7 +249,7 @@ export class GribStore {
     // Ingest GRIB files that have no cache slices yet — bounded concurrency
     const toIngest = gribFiles.filter(g => !ingestedBasenames.has(gribBasename(g)))
     await mapLimit(toIngest, this.maxConcurrentIngests, gribPath =>
-      ingestGrib(gribPath, cacheDir, this.eccodesImage, this.log).then(() => {}).catch(err =>
+      ingestGrib(gribPath, cacheDir, this.log).then(() => {}).catch(err =>
         this.log(`Ingest failed for ${path.basename(gribPath)}: ${err}`)
       )
     )

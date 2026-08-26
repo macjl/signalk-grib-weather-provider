@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed (breaking)
+- GRIB→cache conversion now runs in-process through the WebAssembly build of
+  ecCodes (`@meri-imperiumi/eccodes-wasm`) instead of a one-shot Docker
+  container job. The `signalk-container` plugin and a container runtime are no
+  longer required — `signalk.requires` and the `eccodesImage` setting have been
+  removed, and the `eccodes-container/` directory (Dockerfile + `grib2cache.py`)
+  has been deleted. The `.gribcache` binary format is unchanged, so existing
+  caches remain valid and the two backends produce interchangeable output.
+
+### Added
+- TypeScript port of the conversion logic (`src/ingest-wasm.ts`) with message
+  splitting and float32 encoding, backed by tests against a real GFS fixture
+  committed under `test/fixtures/`
+
 ## [0.2.3] — 2026-07-02
 
 ### Changed
