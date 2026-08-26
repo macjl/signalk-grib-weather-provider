@@ -15,10 +15,11 @@ const { getEccodes } = require('../dist/ingest-wasm.js')
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'gfs.t00z.pgrb2.1p00.sample.grb2')
 
-let wasmOk
+let wasmOk = false
+let wasmErr = null
 before(async () => {
   try { await getEccodes(); wasmOk = true }
-  catch (err) { wasmOk = { err } }
+  catch (err) { wasmErr = err }
 })
 
 let cacheDir

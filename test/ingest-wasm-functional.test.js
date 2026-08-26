@@ -19,13 +19,14 @@ const FIXTURE = path.join(__dirname, 'fixtures', 'gfs.t00z.pgrb2.1p00.sample.grb
 // The WASM build needs memory64, available from Node 24. On older runtimes the
 // module simply cannot be instantiated — the detection below is used to skip
 // (not silently pass) the functional test, so coverage stays honest.
-let wasmOk = null
+let wasmOk = false
+let wasmErr = null
 before(async () => {
   try {
     await getEccodes()
     wasmOk = true
   } catch (err) {
-    wasmOk = { err }
+    wasmErr = err
   }
 })
 
@@ -35,7 +36,7 @@ after(() => { fs.rmSync(cacheDir, { recursive: true, force: true }) })
 
 test('ingestGribWasm: converts the GFS fixture to one .gribcache per validity time', async (t) => {
   if (!wasmOk) {
-    t.skip(`eccodes-wasm not loadable on this runtime (Node ${process.version}): ${wasmOk ? wasmOk.err.message : 'unknown'}`)
+    t.skip(`eccodes-wasm not loadable on this runtime (Node ${process.version}): ${wasmErr ? wasmErr.message : 'unknown'}`)
     return
   }
 
