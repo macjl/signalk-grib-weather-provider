@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.0] — 2026-08-26
 
 ### Changed (breaking)
 - GRIB→cache conversion now runs in-process through the WebAssembly build of
