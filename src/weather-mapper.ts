@@ -12,7 +12,9 @@ function uvToSpeedDir(u: number, v: number): { speed: number; direction: number 
 // Map a TimeSlice (field values already in SI units) to a WeatherData object.
 export function toWeatherData(slice: TimeSlice, type: WeatherForecastType): WeatherData {
   const v = slice.values
-  const data: WeatherData = { date: slice.validAt.toISOString(), type }
+  // validAtISO is memoized at scan time — skips one Date#toISOString per
+  // slice per request
+  const data: WeatherData = { date: slice.validAtISO ?? slice.validAt.toISOString(), type }
 
   if (v['windU'] !== undefined && v['windV'] !== undefined) {
     const { speed, direction } = uvToSpeedDir(v['windU'], v['windV'])

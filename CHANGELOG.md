@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- Weather point queries no longer pay per-slice file open/read/close on disk:
+  decoded slice data is buffered in RAM (default 64 MB, configurable via the
+  new `sliceCacheSizeMB` setting) and reused synchronously, so a point
+  forecast becomes pure in-memory math after the first query of a run.
+  Cache entries are dropped automatically when the scan purges their files.
+  Slice files larger than 8 MB each (whole-globe 0.25° grids) are instead
+  served through a pool of open file handles, removing the open/close churn
+  on that path too. On the cold path the four bilinear corner reads are
+  merged into two contiguous reads
+
+### Fixed
+- `validAt` ISO strings are memoized at scan time instead of being
+  recomputed for every slice on every request
+- Short reads from `.gribcache` files (truncated or mid-write files) are now
+  detected and rejected instead of silently serving zeros
+- Cache files are written atomically (temp file + rename), so a scan can no
+  longer observe a half-written slice
+
 ## [0.3.0] — 2026-08-26
 
 ### Changed (breaking)

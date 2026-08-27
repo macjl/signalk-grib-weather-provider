@@ -213,7 +213,12 @@ export async function ingestGribWasm(
     const data = encodeSlice(grid, refTime, validAt, slice)
     const stamp = validAt.replace(/[-:T]/g, '').slice(0, 12)
     const outPath = path.join(cacheDir, `${basename}.t${stamp}.gribcache`)
-    await fs.promises.writeFile(outPath, data)
+    // Atomic write: a scan must never observe a half-written cache file —
+    // the slice cache could buffer it (short reads are guarded, but a
+    // complete-looking truncated file is worse: it would serve zeros).
+    const tmpPath = `${outPath}.tmp`
+    await fs.promises.writeFile(tmpPath, data)
+    await fs.promises.rename(tmpPath, outPath)
     log(`Written ${data.length.toLocaleString('en-US')} bytes → ${outPath}`)
     written++
   }
