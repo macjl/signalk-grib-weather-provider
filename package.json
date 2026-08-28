@@ -1,6 +1,6 @@
 {
   "name": "signalk-grib-weather-provider",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Signal K Weather API provider serving local GRIB2 files (GFS, Arpège, Arome, ICON) — each source becomes a selectable weather provider",
   "main": "dist/index.js",
   "scripts": {
@@ -57,6 +57,6 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@meri-imperiumi/eccodes-wasm": "^2.48.1"
+    "@meri-imperiumi/eccodes-wasm": "^2.48.2"
   }
 }

@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.4.0] — 2026-08-28
 
 ### Changed
 - Weather point queries no longer pay per-slice file open/read/close on disk:
