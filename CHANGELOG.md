@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] — 2026-08-28
+
+### Added
+- App Store recommendations for `signalk-grib-downloader` and
+  `signalk-weather-map`
+
 ## [0.4.0] — 2026-08-28
 
 ### Changed
