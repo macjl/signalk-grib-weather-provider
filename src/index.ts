@@ -52,6 +52,17 @@ const buildSchema = (defaultRoot: string) => ({
       default: 2,
       minimum: 1,
     },
+    sliceCacheSizeMB: {
+      type: 'number',
+      title: 'Slice cache size (MB)',
+      description:
+        'RAM budget for buffering decoded weather slices, reused by every ' +
+        'point query. Files up to 8 MB each are cached whole; larger ' +
+        '(global) slices reuse open file handles instead. Lower it on ' +
+        'memory-constrained hosts.',
+      default: 64,
+      minimum: 1,
+    },
   },
 })
 
@@ -119,7 +130,10 @@ module.exports = (server: PluginApp): Plugin => {
         cacheRoot,
         (msg: string) => server.debug(msg),
         onScan,
-        options.maxConcurrentIngests ?? 2
+        {
+          maxConcurrentIngests: options.maxConcurrentIngests ?? 2,
+          sliceCacheSizeMB: options.sliceCacheSizeMB ?? 64,
+        }
       )
 
       server.setPluginStatus('Starting up …')

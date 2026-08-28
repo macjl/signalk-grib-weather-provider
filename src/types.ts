@@ -11,6 +11,7 @@ export interface PluginSettings {
   cacheRoot?: string             // where .gribcache trees live (default: plugin data dir)
   scanIntervalMinutes?: number
   maxConcurrentIngests?: number  // cap on simultaneous GRIB→cache conversions
+  sliceCacheSizeMB?: number      // RAM budget for buffered slice data (default 64)
 }
 
 export interface GridMeta {
@@ -37,9 +38,11 @@ export interface CacheFileMeta {
 export interface CacheEntry {
   filePath: string
   meta: CacheFileMeta
+  validAtISO: string  // memoized meta.validAt.toISOString() — computed once per scan
 }
 
 export interface TimeSlice {
   validAt: Date
+  validAtISO?: string             // memoized validAt.toISOString()
   values: Record<string, number>  // field name → SI-unit value
 }

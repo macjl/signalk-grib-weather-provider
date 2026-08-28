@@ -2,16 +2,22 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { Position, WeatherData, WeatherForecastType, WeatherReqParams } from '@signalk/server-api'
 import { CacheEntry, SourceConfig, TimeSlice } from './types'
-import { readCacheHeader, queryAtPosition } from './grib-cache'
+import { readCacheHeader, queryAtPosition, queryAtPositionSync, evictStaleCache, clearGribCache, configureGribCache } from './grib-cache'
 import { toWeatherData } from './weather-mapper'
 import { ingestGrib, gribBasename, CACHE_FILE_RE } from './ingest-manager'
 
 const GRIB_EXTENSIONS = new Set(['.grb2', '.grib2', '.grb', '.grib'])
 const DEFAULT_MAX_CONCURRENT_INGESTS = 2
+const DEFAULT_SLICE_CACHE_MB = 64
 
 export interface ScanSummary {
   sources: { name: string; slices: number }[]
   errors: string[]
+}
+
+export interface GribStoreOptions {
+  maxConcurrentIngests?: number
+  sliceCacheSizeMB?: number
 }
 
 // Run fn over items with at most `limit` concurrent executions.
@@ -38,8 +44,15 @@ export class GribStore {
     private cacheRoot: string,
     private log: (msg: string) => void,
     private onScan?: (summary: ScanSummary) => void,
-    private maxConcurrentIngests: number = DEFAULT_MAX_CONCURRENT_INGESTS
-  ) {}
+    options: GribStoreOptions = {}
+  ) {
+    configureGribCache({
+      maxBufferBytes: (options.sliceCacheSizeMB ?? DEFAULT_SLICE_CACHE_MB) * 1024 * 1024,
+    })
+    this.maxConcurrentIngests = options.maxConcurrentIngests ?? DEFAULT_MAX_CONCURRENT_INGESTS
+  }
+
+  private maxConcurrentIngests: number
 
   // Each non-hidden subdirectory of rootDirectory is a source. Its name is
   // the provider ID suffix and display name; caches mirror it under cacheRoot.
@@ -73,6 +86,7 @@ export class GribStore {
       clearInterval(this.scanTimer)
       this.scanTimer = null
     }
+    clearGribCache()
   }
 
   // Called by each per-source provider registered in index.ts.
@@ -118,7 +132,8 @@ export class GribStore {
       const pa = p.meta.precipAccum
       if (this.sameRun(p, first) && pa !== null && pa[0] === firstAccum[0] && pa[1] < firstAccum[1]) {
         try {
-          const v = await queryAtPosition(p.filePath, p.meta, lat, lon)
+          const v = queryAtPositionSync(p.filePath, p.meta, lat, lon)
+            ?? await queryAtPosition(p.filePath, p.meta, lat, lon)
           if (v['precip'] !== undefined) {
             prev = { ref: p.meta.refTime?.getTime() ?? null, accum: pa, raw: v['precip'] }
           }
@@ -130,7 +145,10 @@ export class GribStore {
     for (let i = startIdx; i < endIdx; i++) {
       const entry = entries[i]
       try {
-        const values = await queryAtPosition(entry.filePath, entry.meta, lat, lon)
+        // P3: buffered slices resolve synchronously (zero syscalls); only a
+        // cold slice awaits open/read/prime.
+        const values = queryAtPositionSync(entry.filePath, entry.meta, lat, lon)
+          ?? await queryAtPosition(entry.filePath, entry.meta, lat, lon)
         if (Object.keys(values).length === 0) continue
 
         const rawPrecip = values['precip']
@@ -149,7 +167,7 @@ export class GribStore {
         }
         // Unknown accumulation window: serve raw value, keep the chain as is.
 
-        const slice: TimeSlice = { validAt: entry.meta.validAt, values }
+        const slice: TimeSlice = { validAt: entry.meta.validAt, validAtISO: entry.validAtISO, values }
         results.push(toWeatherData(slice, type))
       } catch (err) {
         this.log(`Query error for ${entry.filePath}: ${err}`)
@@ -196,6 +214,11 @@ export class GribStore {
         this.log(`Source "${name}" removed`)
       }
     }
+
+    // Drop slice-cache entries whose cache files the scans have purged
+    const evicted = evictStaleCache()
+    if (evicted > 0) this.log(`Slice cache: dropped ${evicted} stale entr${evicted === 1 ? 'y' : 'ies'}`)
+
     try {
       for (const e of fs.readdirSync(this.cacheRoot, { withFileTypes: true })) {
         if (e.isDirectory() && !names.has(e.name)) {
@@ -235,6 +258,17 @@ export class GribStore {
     }
     const ingestedBasenames = new Set<string>()
     for (const f of cacheListing) {
+      if (f.endsWith('.gribcache.tmp')) {
+        // Leftover temp file from an interrupted ingest — remove when stale
+        try {
+          const st = fs.statSync(path.join(cacheDir, f))
+          if (Date.now() - st.mtimeMs > 3600_000) {
+            this.log(`Purging stale ingest temp file: ${f}`)
+            fs.promises.unlink(path.join(cacheDir, f)).catch(() => {})
+          }
+        } catch { /* vanished meanwhile */ }
+        continue
+      }
       if (!f.endsWith('.gribcache')) continue
       const m = CACHE_FILE_RE.exec(f)
       if (m && gribBasenames.has(m[1])) {
@@ -268,7 +302,7 @@ export class GribStore {
     for (const filePath of cacheFiles) {
       try {
         const meta = await readCacheHeader(filePath)
-        parsed.push({ filePath, meta })
+        parsed.push({ filePath, meta, validAtISO: meta.validAt.toISOString() })
       } catch (err) {
         // Unreadable or outdated format — delete so the GRIB gets re-ingested
         this.log(`Purging unreadable cache file ${path.basename(filePath)}: ${err}`)

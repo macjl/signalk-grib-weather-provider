@@ -6,10 +6,16 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
-const { readCacheHeader, queryAtPosition } = require('../dist/grib-cache.js')
+const {
+  readCacheHeader, queryAtPosition, queryAtPositionSync,
+  clearGribCache, evictStaleCache, gribCacheStats, configureGribCache,
+} = require('../dist/grib-cache.js')
 
 // Build a synthetic .gribcache (version 2) file and return its path.
 // `values` is a function (j, i, varIdx) → number (NaN allowed).
+// Each build gets a unique file name: the slice cache is module-level and
+// persists across tests, so reusing a path would serve stale buffers.
+let buildCount = 0
 function buildCache({ version = 2, meta, values }, dir) {
   const grid = meta
   const json = Buffer.from(JSON.stringify(meta), 'utf-8')
@@ -28,7 +34,7 @@ function buildCache({ version = 2, meta, values }, dir) {
   header.writeUInt8(version, 4)
   header.writeUInt32BE(json.length, 5)
 
-  const filePath = path.join(dir, `test.t202606101200.gribcache`)
+  const filePath = path.join(dir, `test-${++buildCount}.t202606101200.gribcache`)
   fs.writeFileSync(filePath, Buffer.concat([header, json, data]))
   return filePath
 }
@@ -47,7 +53,10 @@ const META = {
 const VALUES = (j, i, k) => (k === 0 ? j * 10 + i : 1)
 
 let tmpDir
-test.before(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gribcache-')) })
+test.before(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gribcache-'))
+})
+test.beforeEach(() => clearGribCache())
 test.after(() => { fs.rmSync(tmpDir, { recursive: true, force: true }) })
 
 test('readCacheHeader parses v2 header', async () => {
@@ -64,6 +73,12 @@ test('readCacheHeader parses v2 header', async () => {
 test('readCacheHeader rejects unsupported version', async () => {
   const file = buildCache({ version: 1, meta: META, values: VALUES }, tmpDir)
   await assert.rejects(() => readCacheHeader(file), /Unsupported gribcache version/)
+})
+
+test('readCacheHeader rejects truncated file', async () => {
+  const file = buildCache({ meta: META, values: VALUES }, tmpDir)
+  fs.truncateSync(file, 40)  // header JSON cut mid-way
+  await assert.rejects(() => readCacheHeader(file), /Short read/)
 })
 
 test('queryAtPosition: exact grid point', async () => {
@@ -108,4 +123,103 @@ test('queryAtPosition: NaN corner falls back to defined neighbour', async () => 
   const v = await queryAtPosition(file, meta, 40.5, 350.5)
   assert.strictEqual(v.precip, 1)        // fallback to a defined corner
   assert.ok(Math.abs(v.temp2m - 5.5) < 1e-6)  // other vars still interpolated
+})
+
+test('warm (buffered) query deep-equals the cold one', async () => {
+  const file = buildCache({ meta: META, values: VALUES }, tmpDir)
+  const meta = await readCacheHeader(file)
+
+  assert.strictEqual(gribCacheStats().buffers, 0, 'nothing buffered yet')
+  const cold = await queryAtPosition(file, meta, 40.5, 350.75)
+  assert.strictEqual(gribCacheStats().buffers, 1, 'slice got buffered by the cold query')
+
+  const warm = await queryAtPosition(file, meta, 40.5, 350.75)
+  assert.deepStrictEqual(warm, cold)
+
+  const sync = queryAtPositionSync(file, meta, 40.5, 350.75)
+  assert.deepStrictEqual(sync, warm)
+})
+
+test('queryAtPositionSync: null before priming, {} outside coverage once buffered', async () => {
+  const file = buildCache({ meta: META, values: VALUES }, tmpDir)
+  const meta = await readCacheHeader(file)
+
+  assert.strictEqual(queryAtPositionSync(file, meta, 41, 351), null)
+  await queryAtPosition(file, meta, 41, 351)  // primes the buffer
+  // null only means "not buffered" — outside coverage still yields {}
+  assert.deepStrictEqual(queryAtPositionSync(file, meta, 50, 351), {})
+})
+
+test('LRU eviction under a small byte budget still answers correctly', async () => {
+  // Each slice's data section is 3×3×2 floats = 72 bytes; a 100-byte budget
+  // fits one slice at a time.
+  configureGribCache({ maxBufferBytes: 100 })
+  try {
+    const fileA = buildCache({ meta: META, values: VALUES }, tmpDir)
+    const fileB = buildCache({ meta: META, values: (j, i, k) => 100 + VALUES(j, i, k) }, tmpDir)
+    const meta = await readCacheHeader(fileA)
+    assert.deepStrictEqual(meta, await readCacheHeader(fileB))
+
+    await queryAtPosition(fileA, meta, 41, 351)
+    assert.strictEqual(gribCacheStats().buffers, 1)
+    assert.strictEqual(gribCacheStats().bufferedBytes, 72)
+
+    await queryAtPosition(fileB, meta, 41, 351)  // evicts A
+    const stats = gribCacheStats()
+    assert.strictEqual(stats.buffers, 1, 'A was evicted when B was buffered')
+    assert.ok(Math.abs((await queryAtPosition(fileA, meta, 41, 351)).temp2m - 11) < 1e-6,
+      'evicted slice re-primes on demand')
+  } finally {
+    configureGribCache({ maxBufferBytes: 64 * 1024 * 1024 })
+    clearGribCache()
+  }
+})
+
+test('truncated data section is never served', async () => {
+  const file = buildCache({ meta: META, values: VALUES }, tmpDir)
+  fs.truncateSync(file, fs.statSync(file).size - 4)
+  const meta = await readCacheHeader(file)  // header still parses
+  await assert.rejects(() => queryAtPosition(file, meta, 41, 351), /Short read/)
+})
+
+test('oversized slices are served through pooled handles, not buffers', async () => {
+  // 1100×1100×2 floats ≈ 9.7 MB data — above the 8 MB per-file threshold.
+  // Grid: lat 40..51, lon 350..361, temp2m = j+i, precip = 1.
+  const bigMeta = { ...META, nLat: 1100, nLon: 1100, dLat: 0.01, dLon: 0.01, precipAccum: null }
+  const linear = (j, i, k) => (k === 0 ? j + i : 1)
+  const file = buildCache({ meta: bigMeta, values: linear }, tmpDir)
+  const meta = await readCacheHeader(file)
+
+  // temp = j+i is bilinearly recoverable exactly: interpolate and check
+  const v1 = await queryAtPosition(file, meta, 45.5, 355.5)
+  assert.ok(Math.abs(v1.temp2m - 1100) < 1e-3)  // j=i=550 → 1100
+  const v2 = await queryAtPosition(file, meta, 45.505, 355.503)
+  assert.ok(Math.abs(v2.temp2m - (550.5 + 550.3)) < 1e-3)
+
+  const stats = gribCacheStats()
+  assert.strictEqual(stats.buffers, 0, 'oversized slice not buffered')
+  assert.strictEqual(stats.handles, 1, 'handle pooled for reuse')
+})
+
+test('evictStaleCache drops entries whose file is gone', async () => {
+  const file = buildCache({ meta: META, values: VALUES }, tmpDir)
+  const meta = await readCacheHeader(file)
+  await queryAtPosition(file, meta, 41, 351)
+  assert.ok(gribCacheStats().buffers >= 1)
+
+  fs.unlinkSync(file)
+  const evicted = evictStaleCache()
+  assert.strictEqual(evicted, 1)
+  assert.strictEqual(gribCacheStats().buffers, 0)
+})
+
+test('clearGribCache empties buffers and handles', async () => {
+  const file = buildCache({ meta: META, values: VALUES }, tmpDir)
+  const meta = await readCacheHeader(file)
+  await queryAtPosition(file, meta, 41, 351)
+  clearGribCache()
+  const stats = gribCacheStats()
+  assert.strictEqual(stats.buffers, 0)
+  assert.strictEqual(stats.handles, 0)
+  assert.strictEqual(stats.bufferedBytes, 0)
 })
