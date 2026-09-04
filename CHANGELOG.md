@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.5.0] — 2026-09-04
 
 ### Added
 - Surface temperature / sea surface temperature extraction from GRIB `t` and
