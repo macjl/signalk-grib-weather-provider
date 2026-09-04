@@ -21,11 +21,12 @@ GRIB2 files ──▶ WebAssembly ecCodes ──▶ .gribcache files ──▶ W
    into compact binary `.gribcache` files — **one per validity time**, so
    multi-timestep GRIB files are fully supported. No Docker, no containers, no
    external image to pull — the converter ships as a normal npm dependency.
-3. Forecast queries are answered by reading only the 4 grid points surrounding the
-   requested position (bilinear interpolation) — nothing is kept in RAM.
+3. Forecast queries are answered from the cached 4 grid points surrounding the
+   requested position (bilinear interpolation).
 
 Extracted variables (when present): 10 m wind U/V, gust, 2 m temperature,
-MSL pressure, 2 m relative humidity, total precipitation, total cloud cover.
+sea surface temperature, MSL pressure, 2 m relative humidity, total
+precipitation, total cloud cover.
 
 Precipitation is de-cumulated within accumulation buckets and normalised to
 **volume per hour**, so values are comparable across models and timestep sizes.

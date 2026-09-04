@@ -33,5 +33,9 @@ export function toWeatherData(slice: TimeSlice, type: WeatherForecastType): Weat
   if (v['precip']     !== undefined) outside.precipitationVolume = v['precip']
   if (Object.keys(outside).length > 0) data.outside = outside
 
+  const water: WeatherData['water'] = {}
+  if (v['waterTemp'] !== undefined) water.temperature = v['waterTemp']
+  if (Object.keys(water).length > 0) data.water = water
+
   return data
 }

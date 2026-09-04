@@ -33,7 +33,7 @@ test('gust is attached only with wind components', () => {
 test('outside fields are mapped and date/type set', () => {
   const d = toWeatherData({
     validAt: AT,
-    values: { temp2m: 290, pressure: 101300, humidity: 0.8, cloudCover: 0.5, precip: 0.002 },
+    values: { temp2m: 290, pressure: 101300, humidity: 0.8, cloudCover: 0.5, precip: 0.002, waterTemp: 288 },
   }, 'point')
   assert.strictEqual(d.date, '2026-06-10T12:00:00.000Z')
   assert.strictEqual(d.type, 'point')
@@ -42,6 +42,7 @@ test('outside fields are mapped and date/type set', () => {
   assert.strictEqual(d.outside.relativeHumidity, 0.8)
   assert.strictEqual(d.outside.cloudCover, 0.5)
   assert.strictEqual(d.outside.precipitationVolume, 0.002)
+  assert.strictEqual(d.water.temperature, 288)
 })
 
 test('empty values produce a bare WeatherData', () => {

@@ -71,14 +71,14 @@ test('forecasts: interpolation, wind mapping and per-hour precip chain', async (
   clearGribCache()
   const root = fs.mkdtempSync(path.join(tmp, 'root-'))
   const cacheRoot = fs.mkdtempSync(path.join(tmp, 'cache-'))
-  const vars = ['temp2m', 'windU', 'windV', 'gust', 'precip']
+  const vars = ['temp2m', 'windU', 'windV', 'gust', 'precip', 'waterTemp']
   const mk = (validAt, precipAccum, precipRaw) => ({
     validAt,
     refTime: '2026-06-10T00:00:00Z',
     precipAccum,
     vars,
-    // temp2m = j*10+i ; wind (3,4) → speed 5 ; gust 9 ; precip raw
-    values: (j, i, k) => (k === 0 ? j * 10 + i : k === 1 ? 3 : k === 2 ? 4 : k === 3 ? 9 : precipRaw),
+    // temp2m = j*10+i ; wind (3,4) → speed 5 ; gust 9 ; precip raw ; water 288 K
+    values: (j, i, k) => (k === 0 ? j * 10 + i : k === 1 ? 3 : k === 2 ? 4 : k === 3 ? 9 : k === 4 ? precipRaw : 288),
   })
   const cacheDir = makeSource(root, cacheRoot, 'gfs', 'run', [
     mk('2026-06-10T06:00:00Z', [0, 6], 0.6),
@@ -99,6 +99,7 @@ test('forecasts: interpolation, wind mapping and per-hour precip chain', async (
       assert.ok(Math.abs(f.outside.temperature - 11) < 1e-6)  // j=1, i=1
       assert.ok(Math.abs(f.wind.speedTrue - 5) < 1e-6)
       assert.strictEqual(f.wind.gust, 9)
+      assert.strictEqual(f.water.temperature, 288)
     }
     // Precip normalised to volume per hour: 0.6/6, (1.8-0.6)/6, (3.6-1.8)/6
     // (tolerance covers float32 storage rounding of the raw values)

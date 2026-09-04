@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Sea surface temperature extraction from GRIB `sst` surface fields, exposed as
+  `water.temperature` in Weather API responses
+
 ## [0.4.1] — 2026-08-28
 
 ### Added
