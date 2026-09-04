@@ -10,6 +10,7 @@ const PARAM_DEFS: [string, string, number, string, number][] = [
   ['2t',    'heightAboveGround', 2,  'temp2m',    1.0],
   ['prmsl', 'meanSea',           0,  'pressure',  1.0],
   ['sst',   'surface',           0,  'waterTemp', 1.0],
+  ['t',     'surface',           0,  'waterTemp', 1.0],  // GFS/NOMADS TMP at surface
   ['2r',    'heightAboveGround', 2,  'humidity',  0.01],
   ['r',     'heightAboveGround', 2,  'humidity',  0.01],
   ['10u',   'heightAboveGround', 10, 'windU',     1.0],
