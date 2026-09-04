@@ -25,8 +25,14 @@ GRIB2 files ──▶ WebAssembly ecCodes ──▶ .gribcache files ──▶ W
    requested position (bilinear interpolation).
 
 Extracted variables (when present): 10 m wind U/V, gust, 2 m temperature,
-sea surface temperature, MSL pressure, 2 m relative humidity, total
-precipitation, total cloud cover.
+surface temperature / sea surface temperature, MSL pressure, 2 m relative
+humidity, total precipitation, total cloud cover.
+
+Surface temperature fields are exposed as `water.temperature`, so clients can
+display the value through the standard Weather API water-temperature field.
+Warning: when a GRIB provides generic surface temperature rather than a true
+sea-surface-temperature field, the value is also available over land. In that
+case it should be read as surface temperature, not as actual water temperature.
 
 Precipitation is de-cumulated within accumulation buckets and normalised to
 **volume per hour**, so values are comparable across models and timestep sizes.
