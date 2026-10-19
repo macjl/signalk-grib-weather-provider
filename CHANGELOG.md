@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **850 hPa temperature and wind U/V in the grid cache** (`temp850`,
+  `windU850`, `windV850`), extracted from GFS/ECMWF isobaric GRIB messages
+  when present. These are the inputs of the thermal front parameter method
+  for automatic surface-front detection (e.g. front-passage timing in
+  signalk-passage-briefing); they are not mapped into the Weather API point
+  responses. The cache format is unchanged and backward compatible: caches
+  written before this change keep their field list and read as before.
+
 ## [0.5.0] — 2026-09-04
 
 ### Added

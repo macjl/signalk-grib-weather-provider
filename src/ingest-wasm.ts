@@ -5,7 +5,8 @@ import { GridMeta } from './types'
 
 // One entry per recognized GRIB message: (shortName, typeOfLevel, level) →
 // (cache field, scale). First matching definition per (validity time, field)
-// wins — keep in sync with eccodes-container/grib2cache.py.
+// wins. Appending entries is backward compatible: existing caches keep their
+// own `vars` list and readers drive off it.
 const PARAM_DEFS: [string, string, number, string, number][] = [
   ['2t',    'heightAboveGround', 2,  'temp2m',    1.0],
   ['prmsl', 'meanSea',           0,  'pressure',  1.0],
@@ -17,6 +18,12 @@ const PARAM_DEFS: [string, string, number, string, number][] = [
   ['u',     'heightAboveGround', 10, 'windU',     1.0],
   ['10v',   'heightAboveGround', 10, 'windV',     1.0],
   ['v',     'heightAboveGround', 10, 'windV',     1.0],
+  // 850 hPa temperature and wind — the inputs of the thermal front parameter
+  // method for automatic surface fronts (GFS via NOMADS `lev_850_mb`, ECMWF
+  // open data pressure-level fields). GFS reports these as isobaricInhPa.
+  ['t',     'isobaricInhPa',     850, 'temp850',  1.0],
+  ['u',     'isobaricInhPa',     850, 'windU850', 1.0],
+  ['v',     'isobaricInhPa',     850, 'windV850', 1.0],
   ['gust',  'surface',           0,  'gust',      1.0],
   ['gust',  'heightAboveGround', 10, 'gust',      1.0],
   ['max_i10fg', 'heightAboveGround', 10, 'gust',  1.0],   // AROME / ICON
@@ -27,7 +34,7 @@ const PARAM_DEFS: [string, string, number, string, number][] = [
 ]
 
 // Output field order (canonical)
-const FIELD_ORDER = ['temp2m', 'pressure', 'waterTemp', 'humidity', 'windU', 'windV', 'gust', 'precip', 'cloudCover']
+const FIELD_ORDER = ['temp2m', 'pressure', 'waterTemp', 'humidity', 'windU', 'windV', 'temp850', 'windU850', 'windV850', 'gust', 'precip', 'cloudCover']
 
 const LOOKUP = new Map<string, { field: string; scale: number }>()
 for (const [sn, tol, lev, field, scale] of PARAM_DEFS) {

@@ -16,6 +16,13 @@ const { readCacheHeader, queryAtPosition } = require('../dist/grib-cache.js')
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'gfs.t00z.pgrb2.1p00.sample.grb2')
 
+// Second fixture: regional GFS 1° (Tasman Sea) fetched from the NOMADS filter
+// with the 850 mb level enabled — temperature and wind U/V on the 850 hPa
+// isobaric surface, the inputs of the thermal front parameter method. Also
+// covers a south→north scanning grid (jScansPositively=true), which the global
+// fixture does not.
+const FIXTURE850 = path.join(__dirname, 'fixtures', 'gfs.t00z.pgrb2.1p00.850.grb2')
+
 // The WASM build needs memory64, available from Node 24. On older runtimes the
 // module simply cannot be instantiated — the detection below is used to skip
 // (not silently pass) the functional test, so coverage stays honest.
@@ -31,8 +38,11 @@ before(async () => {
 })
 
 let cacheDir
+let cacheDir850
 before(() => { cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grib-ingest-')) })
+before(() => { cacheDir850 = fs.mkdtempSync(path.join(os.tmpdir(), 'grib-ingest-850-')) })
 after(() => { fs.rmSync(cacheDir, { recursive: true, force: true }) })
+after(() => { fs.rmSync(cacheDir850, { recursive: true, force: true }) })
 
 test('ingestGribWasm: converts the GFS fixture to one .gribcache per validity time', async (t) => {
   if (!wasmOk) {
@@ -118,5 +128,64 @@ test('ingestGribWasm: rejects a file with no recognized variables', async (t) =>
   await assert.rejects(
     () => ingestGribWasm(bogus, cacheDir, () => {}),
     /No GRIB messages found in file/
+  )
+})
+
+// ── 850 mb fixture: isobaric temperature + wind (front-detection fields) ─────
+
+test('ingestGribWasm: extracts 850 hPa fields from the regional fixture', async (t) => {
+  if (!wasmOk) { t.skip(`eccodes-wasm not loadable (Node ${process.version})`); return }
+
+  await ingestGribWasm(FIXTURE850, cacheDir850, () => {})
+
+  const files = fs.readdirSync(cacheDir850).filter(f => f.endsWith('.gribcache'))
+  assert.strictEqual(files.length, 1, 'one slice for this single-timestep fixture')
+  const file = path.join(cacheDir850, 'gfs.t00z.pgrb2.1p00.850.t202610190000.gribcache')
+  const meta = await readCacheHeader(file)
+
+  assert.strictEqual(meta.validAt.toISOString(), '2026-10-19T00:00:00.000Z')
+  // GFS 1° subregion 160–190°E, 25–45°S, scanned south→north
+  assert.strictEqual(meta.grid.nLat, 21)
+  assert.strictEqual(meta.grid.nLon, 31)
+  assert.strictEqual(meta.grid.latFirst, -45)
+  assert.strictEqual(meta.grid.lonFirst, 160)
+  assert.strictEqual(meta.grid.jScansPositively, true)
+
+  // Canonical field order: the base fields present in the fixture keep their
+  // positions and the 850 fields slot in between windV and gust. Fields the
+  // fixture does not carry (humidity, gust, precip, cloud cover) are absent.
+  assert.deepStrictEqual(
+    meta.vars,
+    ['temp2m', 'pressure', 'windU', 'windV', 'temp850', 'windU850', 'windV850']
+  )
+})
+
+test('ingestGribWasm: queried 850 hPa values are physically plausible', async (t) => {
+  if (!wasmOk) { t.skip(`eccodes-wasm not loadable (Node ${process.version})`); return }
+
+  const file = path.join(cacheDir850, 'gfs.t00z.pgrb2.1p00.850.t202610190000.gribcache')
+  const meta = await readCacheHeader(file)
+
+  const tasman = await queryAtPosition(file, meta, -40, 170)
+  assert.strictEqual(Object.keys(tasman).length, 7, 'all fixture fields present at a covered point')
+  // 850 hPa temperature in Kelvin — austral spring Tasman: roughly 270–290 K
+  assert.ok(tasman.temp850 > 250 && tasman.temp850 < 300, `temp850 ${tasman.temp850}K`)
+  // Wind components in m/s, bounded well below jet strength for sanity
+  assert.ok(Math.abs(tasman.windU850) < 100, `windU850 ${tasman.windU850}m/s`)
+  assert.ok(Math.abs(tasman.windV850) < 100, `windV850 ${tasman.windV850}m/s`)
+  // MSL pressure near 1000 hPa
+  assert.ok(tasman.pressure > 95000 && tasman.pressure < 105000, `pressure ${tasman.pressure}Pa`)
+})
+
+test('ingestGribWasm: old caches without 850 fields keep reading unchanged', async (t) => {
+  if (!wasmOk) { t.skip(`eccodes-wasm not loadable (Node ${process.version})`); return }
+
+  // The global fixture carries no isobaric messages: its cache must come out
+  // exactly as before the 850 fields were added — same vars, same order.
+  const file = path.join(cacheDir, 'gfs.t00z.pgrb2.1p00.sample.t202608251800.gribcache')
+  const meta = await readCacheHeader(file)
+  assert.deepStrictEqual(
+    meta.vars,
+    ['temp2m', 'pressure', 'humidity', 'windU', 'windV', 'gust', 'precip', 'cloudCover']
   )
 })
