@@ -33,6 +33,7 @@ export interface CacheFileMeta {
   vars: string[]    // ordered list of field names matching the float32 layout
   nVars: number
   dataStart: number // byte offset where float32 data begins
+  src: { size: number; mtimeMs: number } | null // source GRIB fetch fingerprint (absent in legacy slices)
 }
 
 export interface CacheEntry {

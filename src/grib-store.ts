@@ -247,6 +247,15 @@ export class GribStore {
       throw new Error(`Cannot read directory: ${gribDir}`)
     }
     const gribBasenames = new Set(gribFiles.map(gribBasename))
+    // Fetch fingerprint of each source GRIB: a slice must carry the same
+    // one to count as current.
+    const gribStatByBasename = new Map<string, { size: number; mtimeMs: number }>()
+    for (const g of gribFiles) {
+      try {
+        const st = fs.statSync(g)
+        gribStatByBasename.set(gribBasename(g), { size: st.size, mtimeMs: st.mtimeMs })
+      } catch { /* vanished meanwhile — the ingest filter drops it */ }
+    }
 
     // Purge: remove cache files that are legacy-format (no .t<stamp> suffix)
     // or whose source GRIB no longer exists.
@@ -257,6 +266,12 @@ export class GribStore {
       cacheListing = []  // cache dir may not exist yet — ingest creates it
     }
     const ingestedBasenames = new Set<string>()
+    // Basenames whose slices no longer match their GRIB: the downloader
+    // re-fetches runs in place (parameter changes wipe and re-download
+    // under the same file names), so slices must follow the content,
+    // not the name. Slices without a fingerprint (legacy format) are
+    // stale too — one re-ingest upgrades them.
+    const staleBasenames = new Set<string>()
     for (const f of cacheListing) {
       if (f.endsWith('.gribcache.tmp')) {
         // Leftover temp file from an interrupted ingest — remove when stale
@@ -273,6 +288,14 @@ export class GribStore {
       const m = CACHE_FILE_RE.exec(f)
       if (m && gribBasenames.has(m[1])) {
         ingestedBasenames.add(m[1])
+        if (!staleBasenames.has(m[1])) {
+          const stat = gribStatByBasename.get(m[1])!
+          let src: { size: number; mtimeMs: number } | null = null
+          try { src = (await readCacheHeader(path.join(cacheDir, f))).src } catch { /* unreadable — the index pass purges it */ }
+          if (!src || src.size !== stat.size || src.mtimeMs !== stat.mtimeMs) {
+            staleBasenames.add(m[1])
+          }
+        }
       } else {
         const stale = path.join(cacheDir, f)
         this.log(`Purging stale cache file: ${f}`)
@@ -280,8 +303,24 @@ export class GribStore {
       }
     }
 
-    // Ingest GRIB files that have no cache slices yet — bounded concurrency
-    const toIngest = gribFiles.filter(g => !ingestedBasenames.has(gribBasename(g)))
+    // Ingest GRIB files with no slices yet — or whose slices are stale.
+    // Re-written GRIBs drop their old slices first: a mid-refetch scan
+    // must never mix slices from the old and new area of one run.
+    const toIngest = gribFiles.filter(g => {
+      const base = gribBasename(g)
+      return staleBasenames.has(base) || !ingestedBasenames.has(base)
+    })
+    for (const g of toIngest) {
+      const base = gribBasename(g)
+      if (!staleBasenames.has(base)) continue
+      for (const f of cacheListing) {
+        const m = CACHE_FILE_RE.exec(f)
+        if (m && m[1] === base) {
+          this.log(`Purging outdated cache slice (GRIB re-fetched): ${f}`)
+          try { fs.unlinkSync(path.join(cacheDir, f)) } catch { /* vanished meanwhile */ }
+        }
+      }
+    }
     await mapLimit(toIngest, this.maxConcurrentIngests, gribPath =>
       ingestGrib(gribPath, cacheDir, this.log).then(() => {}).catch(err =>
         this.log(`Ingest failed for ${path.basename(gribPath)}: ${err}`)

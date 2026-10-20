@@ -19,6 +19,8 @@ const stamp = d => d.toISOString().replace(/\D/g, '').slice(0, 12)
 
 // Write one synthetic .gribcache slice into cacheDir.
 // values: (j, i, varIdx) → number (NaN allowed)
+// The slice carries the placeholder GRIB's fetch fingerprint (size + mtime)
+// when that file already exists, so the scan counts the slice as current.
 function writeSlice(cacheDir, basename, slice) {
   const meta = {
     ...GRID,
@@ -26,6 +28,7 @@ function writeSlice(cacheDir, basename, slice) {
     refTime: slice.refTime ?? null,
     precipAccum: slice.precipAccum ?? null,
     vars: slice.vars,
+    src: slice.src ?? null,
   }
   const json = Buffer.from(JSON.stringify(meta), 'utf-8')
   const nPoints = GRID.nLat * GRID.nLon
@@ -51,10 +54,13 @@ function writeSlice(cacheDir, basename, slice) {
 // cache slices, so no ingest is triggered) and the given cache slices.
 function makeSource(root, cacheRoot, name, basename, slices) {
   fs.mkdirSync(path.join(root, name), { recursive: true })
-  fs.writeFileSync(path.join(root, name, `${basename}.grib2`), Buffer.alloc(0))
+  const gribPath = path.join(root, name, `${basename}.grib2`)
+  fs.writeFileSync(gribPath, Buffer.alloc(0))
+  const stat = fs.statSync(gribPath)
+  const src = { size: stat.size, mtimeMs: stat.mtimeMs }
   const cacheDir = path.join(cacheRoot, name)
   fs.mkdirSync(cacheDir, { recursive: true })
-  for (const slice of slices) writeSlice(cacheDir, basename, slice)
+  for (const slice of slices) writeSlice(cacheDir, basename, { ...slice, src })
   return cacheDir
 }
 
@@ -133,8 +139,12 @@ test('rescan drops removed slices and evicts their cache buffers', async () => {
     values: (j, i) => j * 10 + i,
   })
   const cacheDir = makeSource(root, cacheRoot, 'gfs', 'a', [slice('2026-06-10T06:00:00Z')])
-  writeSlice(cacheDir, 'b', slice('2026-06-10T12:00:00Z'))
   fs.writeFileSync(path.join(root, 'gfs', 'b.grib2'), Buffer.alloc(0))
+  const bStat = fs.statSync(path.join(root, 'gfs', 'b.grib2'))
+  writeSlice(cacheDir, 'b', {
+    ...slice('2026-06-10T12:00:00Z'),
+    src: { size: bStat.size, mtimeMs: bStat.mtimeMs },
+  })
 
   const store1 = newStore(root, cacheRoot)
   await store1.start(120)
@@ -214,4 +224,88 @@ test('perf smoketest: warm pass is syscall-free and identical to cold', async ()
   } finally {
     store.stop()
   }
+})
+
+// A re-fetched GRIB keeps its file name (the downloader wipes and
+// re-downloads a run in place when fetch parameters change) — the scan must
+// follow the content, not the name, and serve slices of the new area instead
+// of the old one forever. Needs the WASM ecCodes build (real ingest).
+test('scan re-ingests a re-fetched GRIB (same name, new content)', async t => {
+  const { ingestGribWasm, getEccodes } = require('../dist/ingest-wasm.js')
+  let wasmOk = false
+  let wasmErr = null
+  try { await getEccodes(); wasmOk = true } catch (err) { wasmErr = err }
+  if (!wasmOk) {
+    t.skip(`eccodes-wasm not loadable on this runtime (Node ${process.version}): ${wasmErr ? wasmErr.message : 'unknown'}`)
+    return
+  }
+  void ingestGribWasm
+  const { readCacheHeader } = require('../dist/grib-cache.js')
+  const FIXTURE850 = path.join(__dirname, 'fixtures', 'gfs.t00z.pgrb2.1p00.850.grb2')
+  const FIXTURE = path.join(__dirname, 'fixtures', 'gfs.t00z.pgrb2.1p00.sample.grb2')
+
+  clearGribCache()
+  const root = fs.mkdtempSync(path.join(tmp, 'root-refetch-'))
+  const cacheRoot = fs.mkdtempSync(path.join(tmp, 'cache-refetch-'))
+  const sourceDir = path.join(root, 'refetch')
+  const gribPath = path.join(sourceDir, 'gfs__run__f000.grb2')
+  fs.mkdirSync(sourceDir, { recursive: true })
+
+  // First fetch: the regional Tasman fixture.
+  fs.copyFileSync(FIXTURE850, gribPath)
+  let before = []
+  let beforeHeader = null
+  const store1 = newStore(root, cacheRoot)
+  try {
+    await store1.start(120)
+    before = fs.readdirSync(path.join(cacheRoot, 'refetch')).filter(f => f.endsWith('.gribcache'))
+    assert.ok(before.length > 0, 'first fetch ingested')
+    beforeHeader = await readCacheHeader(path.join(cacheRoot, 'refetch', before[0]))
+    assert.ok(Number.isFinite(beforeHeader.grid.latFirst), 'Tasman fixture grid parsed')
+  } finally {
+    store1.stop()
+  }
+
+  // Re-fetch: same file names, different content (global fixture) — written
+  // after the slices were cached, as a downloader re-fetch would be.
+  fs.copyFileSync(FIXTURE, gribPath)
+  const now = new Date()
+  fs.utimesSync(gribPath, now, now)
+
+  const store2 = newStore(root, cacheRoot)
+  let after = []
+  try {
+    await store2.start(120)
+    after = fs.readdirSync(path.join(cacheRoot, 'refetch')).filter(f => f.endsWith('.gribcache'))
+    assert.ok(after.length > 0, 're-fetch ingested')
+    const afterHeader = await readCacheHeader(path.join(cacheRoot, 'refetch', after[0]))
+    assert.notStrictEqual(
+      `${afterHeader.grid.latFirst}/${afterHeader.grid.nLat}/${afterHeader.validAt.toISOString()}`,
+      `${beforeHeader.grid.latFirst}/${beforeHeader.grid.nLat}/${beforeHeader.validAt.toISOString()}`,
+      'slices now come from the new GRIB content, not the cached old area',
+    )
+    // The old area's slices are gone: none of the first fetch's files survive.
+    for (const f of before) {
+      assert.ok(!after.includes(f), `old slice purged: ${f}`)
+    }
+    // Idempotent: an unchanged GRIB must not re-ingest (slice mtimes hold).
+    const mtimes = after.map(f => fs.statSync(path.join(cacheRoot, 'refetch', f)).mtimeMs)
+    const store3 = newStore(root, cacheRoot)
+    try {
+      await store3.start(120)
+      for (let i = 0; i < after.length; i++) {
+        assert.strictEqual(
+          fs.statSync(path.join(cacheRoot, 'refetch', after[i])).mtimeMs,
+          mtimes[i],
+          `unchanged slice untouched: ${after[i]}`,
+        )
+      }
+    } finally {
+      store3.stop()
+    }
+  } finally {
+    store2.stop()
+  }
+  fs.rmSync(root, { recursive: true, force: true })
+  fs.rmSync(cacheRoot, { recursive: true, force: true })
 })
