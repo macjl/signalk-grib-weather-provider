@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-20
+
 ### Added
 - **850 hPa temperature and wind U/V in the grid cache** (`temp850`,
   `windU850`, `windV850`), extracted from GFS/ECMWF isobaric GRIB messages
@@ -12,6 +14,19 @@ All notable changes to this project will be documented in this file.
   signalk-passage-briefing); they are not mapped into the Weather API point
   responses. The cache format is unchanged and backward compatible: caches
   written before this change keep their field list and read as before.
+
+### Changed
+- Updated development dependencies (`@signalk/server-api` and `@types/node`).
+- Removed obsolete Dependabot Docker updates for the deleted ecCodes container.
+
+### Known limitations and upgrade notes
+- Existing decoded caches are not automatically rebuilt when a GRIB file is
+  replaced under the same basename or when extraction fields change. Newly
+  decoded GRIB files include the 850 hPa fields when present, but existing caches
+  may require manual regeneration to expose them. Automatic cache invalidation
+  is tracked in [#16](https://github.com/macjl/signalk-grib-weather-provider/issues/16).
+- The new 850 hPa fields are available through the grid cache only; Weather API
+  point responses are unchanged.
 
 ## [0.5.0] — 2026-09-04
 
