@@ -210,6 +210,9 @@ export async function readCacheHeader(filePath: string): Promise<CacheFileMeta> 
       vars:        m.vars as string[],
       nVars:       m.vars.length,
       dataStart:   9 + jsonLen,
+      src:         m.src && typeof m.src.size === 'number' && typeof m.src.mtimeMs === 'number'
+        ? { size: m.src.size, mtimeMs: m.src.mtimeMs }
+        : null,
     }
   } finally {
     await fh.close()

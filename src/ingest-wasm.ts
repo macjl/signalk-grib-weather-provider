@@ -98,11 +98,14 @@ function ecDateToISO(date: number, time: number): string {
 }
 
 // Encode one .gribcache slice (version 2) — see grib2cache.py for the format.
+// `src` records the source GRIB's fetch fingerprint (size + mtime) so a scan
+// can tell a slice whose GRIB was re-fetched in place from one that matches.
 function encodeSlice(
   grid: GridMeta,
   refTime: string | null,
   validAt: string,
-  slice: SliceData
+  slice: SliceData,
+  src: { size: number; mtimeMs: number }
 ): Buffer {
   const fieldsPresent = FIELD_ORDER.filter(f => slice.fields.has(f))
   if (fieldsPresent.length === 0) throw new Error('No recognized fields in slice')
@@ -113,6 +116,7 @@ function encodeSlice(
     refTime,
     vars: fieldsPresent,
     precipAccum: slice.precipAccum,
+    src,
   }
   const metaJson = Buffer.from(JSON.stringify(meta), 'utf-8')
 
@@ -154,6 +158,9 @@ export async function ingestGribWasm(
   const buf = await fs.promises.readFile(gribPath)
   const messages = splitGribMessages(buf)
   if (messages.length === 0) throw new Error('No GRIB messages found in file')
+  // Fetch fingerprint of the source: slices carry it so a later scan can
+  // tell a re-fetched GRIB (same names, new content) from a matching one.
+  const src = { size: buf.length, mtimeMs: (await fs.promises.stat(gribPath)).mtimeMs }
 
   for (const { offset, length } of messages) {
     eccodes.writeFile(MEMFS_GRIB, new Uint8Array(buf.subarray(offset, offset + length)))
@@ -219,7 +226,7 @@ export async function ingestGribWasm(
   let written = 0
   for (const validAt of [...slices.keys()].sort()) {
     const slice = slices.get(validAt)!
-    const data = encodeSlice(grid, refTime, validAt, slice)
+    const data = encodeSlice(grid, refTime, validAt, slice, src)
     const stamp = validAt.replace(/[-:T]/g, '').slice(0, 12)
     const outPath = path.join(cacheDir, `${basename}.t${stamp}.gribcache`)
     // Atomic write: a scan must never observe a half-written cache file —

@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Fixed
+- **A re-fetched GRIB is now re-ingested.** The scan treated a source GRIB
+  as ingested forever once any cache slice carried its basename — the
+  invalidation assumed GRIB files are write-once. But signalk-grib-downloader
+  re-fetches runs in place when the fetch parameters change (area, variables,
+  levels): it wipes the run and re-downloads under the same file names, so
+  after every re-fetch the provider kept serving the previous area's slices
+  indefinitely while the new GRIB sat on disk — a boat whose download area
+  was widened from boat-centered to the full passage never saw the wider
+  data until the cache was deleted by hand. Each slice's header now records
+  the source GRIB's fetch fingerprint (size + mtime) and the scan re-ingests
+  basenames whose slices no longer match, dropping the outdated slices
+  before the new ingest so a mid-refetch scan never mixes the old and new
+  areas of one run. Slices written before this change carry no fingerprint
+  and re-ingest once on the first scan — which also heals caches that are
+  already stale. Implements the automatic cache invalidation tracked in
+  [#16](https://github.com/macjl/signalk-grib-weather-provider/issues/16).
+
 ## [0.6.0] - 2026-10-20
 
 ### Added
