@@ -26,7 +26,9 @@ GRIB2 files ──▶ WebAssembly ecCodes ──▶ .gribcache files ──▶ W
 
 Extracted variables (when present): 10 m wind U/V, gust, 2 m temperature,
 surface temperature / sea surface temperature, MSL pressure, 2 m relative
-humidity, total precipitation, total cloud cover.
+humidity, total precipitation, total cloud cover, and 850 hPa temperature
+plus wind U/V (the inputs of the thermal front parameter method for
+automatic surface-front detection).
 
 Surface temperature fields are exposed as `water.temperature`, so clients can
 display the value through the standard Weather API water-temperature field.
