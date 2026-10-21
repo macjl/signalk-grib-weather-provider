@@ -15,7 +15,7 @@ interface Dataset {
   run?: string; createdAt: string; requested?: { source?: string }; assets: Asset[]
 }
 interface Mirror { endpoint: string; datasets: Dataset[] }
-export interface CatalogueOptions { url: string; tokenFile: string; directory: string; cacheRoot: string; maxAssetBytes?: number; maxCacheBytes?: number }
+export interface CatalogueOptions { url: string; tokenFile: string; directory: string; cacheRoot: string; maxAssetBytes?: number; maxCacheBytes?: number; tokenReader?: () => string; onUnauthorized?: (token: string) => void }
 
 export class CatalogueClient {
   readonly endpoint: string
@@ -34,13 +34,15 @@ export class CatalogueClient {
   }
 
   private headers(): Record<string, string> {
-    const token = this.options.tokenFile ? fs.readFileSync(this.options.tokenFile, 'utf8').trim() : ''
+    const token = this.options.tokenReader ? this.options.tokenReader() : this.options.tokenFile ? fs.readFileSync(this.options.tokenFile, 'utf8').trim() : ''
     return { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Accept-Encoding': 'identity' }
   }
   private async request(route: string, signal: AbortSignal): Promise<Response> {
+    const headers = this.headers()
     const response = await fetch(this.endpoint + route, {
-      headers: this.headers(), signal: AbortSignal.any([signal, AbortSignal.timeout(300_000)]), redirect: 'error',
+      headers, signal: AbortSignal.any([signal, AbortSignal.timeout(300_000)]), redirect: 'error',
     })
+    if (response.status === 401) this.options.onUnauthorized?.(headers.Authorization?.slice(7) ?? '')
     if (!response.ok) {
       await response.body?.cancel()
       throw new Error(`Forecast catalogue: HTTP ${response.status}${[401, 403].includes(response.status) ? ' (check the readonly token file)' : ''}`)

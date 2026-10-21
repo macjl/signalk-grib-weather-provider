@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0-beta.2] - 2026-10-21
+
+- Request catalogue access automatically through Signal K Access Requests when
+  no token is configured; require administrator approval with this plugin's
+  least-privilege permissions and persist the token privately.
+- Resume pending requests across restarts, report waiting/denied states and
+  resume catalogue work immediately after approval. Stop polling on plugin stop.
+- Renew automatically issued tokens rejected with HTTP 401 while preserving
+  manually configured or concurrently rotated tokens.
+- Cover the access lifecycle, plugin startup and approval-driven resumption;
+  validate both permission levels against an actual Signal K server.
+
 ## [0.7.0-beta.1] - 2026-10-21
 
 - Discover complete GRIB forecast datasets through Forecast Dataset Provider

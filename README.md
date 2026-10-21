@@ -83,10 +83,20 @@ No container runtime or external ecCodes image is needed by the plugin.
 | `maxConcurrentIngests` | Conversion concurrency, default 2. Each job loads full grids into memory. |
 | `sliceCacheSizeMB` | RAM budget for decoded point-query buffers, default 64 MiB. |
 
-Approve a dedicated **readonly** device through Signal K's Access Requests API
-and place its token in `catalogueTokenFile`. The sandbox installation helper
-performs this setup for the explicitly selected sandbox. Keep this consumer's
-token separate from the downloader's readwrite producer token.
+When the token file is missing, the plugin automatically requests **readonly**
+access. On the catalogue server's Signal K Admin UI, open **Security → Access
+Requests** and approve the **signalk-grib-weather-provider** request. The plugin
+saves its token with permissions `0600` and immediately refreshes the catalogue;
+no manual token-file setup is needed. Pending requests survive plugin restarts.
+After a denial, restart the plugin to submit a new request. Device access
+requests must be enabled on the catalogue server.
+
+Existing token files are reused and reread for rotation. Automatically issued
+tokens rejected with HTTP 401 request approval again. Externally configured
+tokens remain under their owner's control. Request IDs and token contents are
+never exposed in status responses or logs. Keep this consumer's token separate
+from the downloader's readwrite token, and use a separate file when changing
+catalogue servers.
 
 `GET /plugins/signalk-grib-weather-provider/status` exposes input mode,
 source slice counts, selected dataset IDs/content versions and refresh errors.

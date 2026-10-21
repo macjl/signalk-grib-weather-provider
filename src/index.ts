@@ -6,6 +6,7 @@ import { WeatherProviderRegistry } from '@signalk/server-api'
 import { GribStore, ScanSummary } from './grib-store'
 import { PluginSettings } from './types'
 import { CatalogueClient } from './catalogue'
+import { CatalogueAccess } from './catalogue-access'
 
 interface PluginApp extends ServerAPI, WeatherProviderRegistry {}
 
@@ -27,7 +28,7 @@ const buildSchema = () => ({
     },
     catalogueTokenFile: {
       type: 'string', title: 'Readonly catalogue token file', default: '',
-      description: 'Absolute path to a readonly application token. Empty uses <plugin data directory>/catalogue-token. Contents are never exposed in status or logs.',
+      description: 'Token file, default <plugin data directory>/catalogue-token. When missing, approve the automatic readonly request in Signal K Security > Access Requests. Contents are never exposed in status or logs.',
     },
     maxAssetBytes: { type: 'integer', title: 'Maximum bytes per catalogue asset', minimum: 1, default: 2 * 1024 ** 3 },
     maxCatalogueCacheBytes: { type: 'integer', title: 'Maximum bytes in a selected catalogue snapshot', minimum: 1, default: 8 * 1024 ** 3 },
@@ -73,6 +74,7 @@ module.exports = (server: PluginApp): Plugin => {
   let registered = new Set<string>()
   let lastSummary: ScanSummary = { sources: [], errors: [] }
   let catalogueUrl: string | undefined
+  let access: CatalogueAccess | null = null
 
   const plugin: Plugin = {
     id: PLUGIN_ID,
@@ -95,9 +97,19 @@ module.exports = (server: PluginApp): Plugin => {
         url: options.catalogueUrl || 'http://127.0.0.1:3000', tokenFile,
         directory: path.join(server.getDataDirPath(), 'catalogue-assets'), cacheRoot,
         maxAssetBytes: options.maxAssetBytes, maxCacheBytes: options.maxCatalogueCacheBytes,
+        tokenReader: () => authorizer.token(),
+        onUnauthorized: token => authorizer.rejected(token),
       }, message => server.debug(message))
       catalogueUrl = catalogue.endpoint
       let active: GribStore
+      let initialScan: Promise<void>
+      const authorizer = new CatalogueAccess({
+        endpoint: catalogue.endpoint, tokenFile, dataDir: server.getDataDirPath(),
+        pluginId: PLUGIN_ID, permissions: 'readonly',
+        onChange: () => { if (access && access.status().state !== 'ready') server.setPluginStatus(access.status().message) },
+        onReady: () => { initialScan.then(() => { if (store === active) return active.refresh() }).catch(() => server.debug('Catalogue refresh after access approval failed')) },
+      })
+      access = authorizer
 
       // Register/unregister weather providers to follow discovered sources.
       const syncProviders = (names: string[]) => {
@@ -130,6 +142,10 @@ module.exports = (server: PluginApp): Plugin => {
         if (store !== active) return
         lastSummary = summary
         syncProviders(summary.sources.filter(s => s.slices > 0).map(s => s.name))
+        if (access && access.status().state !== 'ready') {
+          server.setPluginStatus(access.status().message)
+          return
+        }
         const parts = summary.sources.map(s => `${s.name}: ${s.slices} slice(s)`)
         if (summary.errors.length > 0) {
           server.setPluginStatus(`${parts.join(', ') || 'no sources'} — ${summary.errors.length} error(s), see debug log`)
@@ -152,14 +168,18 @@ module.exports = (server: PluginApp): Plugin => {
 
       store = active
       server.setPluginStatus('Starting up …')
-      active.start(Math.max(1, options.scanIntervalMinutes ?? 5)).catch((err: unknown) => {
+      initialScan = active.start(Math.max(1, options.scanIntervalMinutes ?? 5)).catch((err: unknown) => {
         if (store === active) server.setPluginError(`Startup error: ${err}`)
       })
+      access.start()
     },
 
     stop: async () => {
       const active = store
       store = null
+      const previousAccess = access
+      access = null
+      await previousAccess?.stop()
       const weatherApi = (server as any).weatherApi
       for (const name of registered) {
         weatherApi?.unRegister(`${PLUGIN_ID}:${name}`)
@@ -175,7 +195,7 @@ module.exports = (server: PluginApp): Plugin => {
       })
       router.get('/status', (_req: any, res: any) => {
         if (!store) return res.status(503).json({ error: 'plugin not started' })
-        res.json({ inputMode: 'catalogue', catalogueUrl, ...lastSummary })
+        res.json({ inputMode: 'catalogue', catalogueUrl, catalogueAccess: access?.status(), ...lastSummary })
       })
     },
   }
