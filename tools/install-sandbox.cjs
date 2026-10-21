@@ -5,7 +5,9 @@ const path = require('node:path')
 const assert = require('node:assert/strict')
 const { execFileSync } = require('node:child_process')
 const { createHash, createHmac } = require('node:crypto')
-const root = '/home/node/.signalk', name = 'signalk-grib-weather-provider'
+const root = process.env.SIGNALK_NODE_CONFIG_DIR
+assert.ok(root && path.isAbsolute(root), 'Set SIGNALK_NODE_CONFIG_DIR to the absolute Signal K configuration directory')
+const name = 'signalk-grib-weather-provider'
 const base = 'http://127.0.0.1:3000'
 const archive = process.argv[2]
 assert.equal(process.env.SIGNALK_CONTAINER_ID, 'signalk-sandbox')
