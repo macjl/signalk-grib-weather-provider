@@ -1,7 +1,7 @@
 {
   "name": "signalk-grib-weather-provider",
-  "version": "0.6.0",
-  "description": "Signal K Weather API provider serving local GRIB2 files (GFS, Arpège, Arome, ICON) — each source becomes a selectable weather provider",
+  "version": "0.7.0-beta.1",
+  "description": "Signal K Weather API provider decoding immutable GRIB datasets from Forecast Dataset Provider",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -36,7 +36,8 @@
     "test/",
     "screenshots/",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "docs/"
   ],
   "engines": {
     "node": ">=24"
@@ -50,6 +51,9 @@
     ],
     "screenshots": [
       "./screenshots/grib-weather-provider.png"
+    ],
+    "requires": [
+      "signalk-forecast-dataset-provider"
     ]
   },
   "peerDependencies": {

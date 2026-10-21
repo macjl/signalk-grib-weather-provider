@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0-beta.1] - 2026-10-21
+
+- Discover complete GRIB forecast datasets through Forecast Dataset Provider
+  contract 0.1; keep existing downloader source Weather API identifiers.
+- Use authenticated readonly HTTP, version-bound URLs, streaming transfers,
+  exact lengths and SHA-256 validation, with asset-level restart recovery.
+- Keep private original/decoded caches keyed by dataset content version. Select
+  the newest acquisition per downloader source; never write catalogue storage.
+- Persist working forecasts across catalogue outages and restarts. A failed new
+  conversion keeps the previous index; complete source replacements are atomic.
+- Serialize scans, abort transfers and await ongoing scans on stop; expose
+  operational status and immediate-refresh endpoints.
+- Default to catalogue mode, with an explicit legacy `local` input mode. Require
+  Forecast Dataset Provider for normal catalogue operation and keep Node 24+.
+- Add catalogue transport/lifecycle tests and real GRIB-to-Weather API coverage.
+
+
 ## [0.6.0] - 2026-10-20
 
 ### Added
