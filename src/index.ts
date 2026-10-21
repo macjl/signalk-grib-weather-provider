@@ -18,13 +18,9 @@ function expandHome(p: string): string {
   return p
 }
 
-const buildSchema = (defaultRoot: string) => ({
+const buildSchema = () => ({
   type: 'object',
   properties: {
-    inputMode: {
-      type: 'string', title: 'Forecast input', enum: ['catalogue', 'local'], default: 'catalogue',
-      description: 'Discover immutable GRIB datasets from Forecast Dataset Provider. Local mode reads legacy GRIB directories.',
-    },
     catalogueUrl: {
       type: 'string', title: 'Forecast catalogue server URL', default: 'http://127.0.0.1:3000',
       description: 'Signal K server running Forecast Dataset Provider 0.1.x. Remote servers require HTTPS.',
@@ -35,27 +31,17 @@ const buildSchema = (defaultRoot: string) => ({
     },
     maxAssetBytes: { type: 'integer', title: 'Maximum bytes per catalogue asset', minimum: 1, default: 2 * 1024 ** 3 },
     maxCatalogueCacheBytes: { type: 'integer', title: 'Maximum bytes in a selected catalogue snapshot', minimum: 1, default: 8 * 1024 ** 3 },
-    rootDirectory: {
-      type: 'string',
-      title: 'Local GRIB root directory (local mode only)',
-      description:
-        'Every subdirectory is served as a weather provider named after the ' +
-        'directory (e.g. <root>/gfs-0p25 → provider "…:gfs-0p25"). Drop GRIB2 ' +
-        'files in a subdirectory — or let signalk-grib-downloader manage them. ' +
-        '"~" is expanded.',
-      default: defaultRoot,
-    },
     cacheRoot: {
       type: 'string',
       title: 'Cache root directory (optional)',
       description:
         'Where .gribcache trees are stored, mirroring the source names. ' +
-        'Defaults to the plugin data directory. Keep it outside the GRIB root.',
+        'Defaults to the plugin data directory; the catalogue/ child holds decoded acquisitions.',
     },
     scanIntervalMinutes: {
       type: 'number',
       title: 'Scan interval (minutes)',
-      description: 'How often to discover catalogue acquisitions (or GRIB directories in local mode)',
+      description: 'How often to discover catalogue acquisitions',
       default: 5,
       minimum: 1,
     },
@@ -86,15 +72,12 @@ module.exports = (server: PluginApp): Plugin => {
   let store: GribStore | null = null
   let registered = new Set<string>()
   let lastSummary: ScanSummary = { sources: [], errors: [] }
-  let inputMode: 'catalogue' | 'local' = 'catalogue'
   let catalogueUrl: string | undefined
-
-  const DEFAULT_ROOT = '~/.signalk/gribs'
 
   const plugin: Plugin = {
     id: PLUGIN_ID,
     name: 'GRIB Weather Provider',
-    schema: () => buildSchema(DEFAULT_ROOT),
+    schema: buildSchema,
 
     start: (options: PluginSettings) => {
       // Access the weather API directly to support one provider per source.
@@ -104,19 +87,16 @@ module.exports = (server: PluginApp): Plugin => {
         return
       }
 
-      inputMode = options.inputMode ?? 'catalogue'
-      if (!['catalogue', 'local'].includes(inputMode)) throw new Error('Invalid forecast input mode')
-      const rootDirectory = expandHome(options.rootDirectory || DEFAULT_ROOT)
       const configuredCacheRoot = expandHome(options.cacheRoot || path.join(server.getDataDirPath(), 'cache'))
-      const cacheRoot = inputMode === 'catalogue' ? path.join(configuredCacheRoot, 'catalogue') : configuredCacheRoot
+      const cacheRoot = path.join(configuredCacheRoot, 'catalogue')
       const tokenFile = expandHome(options.catalogueTokenFile || path.join(server.getDataDirPath(), 'catalogue-token'))
-      if (inputMode === 'catalogue' && !path.isAbsolute(tokenFile)) throw new Error('Catalogue token file must be absolute')
-      const catalogue = inputMode === 'catalogue' ? new CatalogueClient({
+      if (!path.isAbsolute(tokenFile)) throw new Error('Catalogue token file must be absolute')
+      const catalogue = new CatalogueClient({
         url: options.catalogueUrl || 'http://127.0.0.1:3000', tokenFile,
         directory: path.join(server.getDataDirPath(), 'catalogue-assets'), cacheRoot,
         maxAssetBytes: options.maxAssetBytes, maxCacheBytes: options.maxCatalogueCacheBytes,
-      }, message => server.debug(message)) : undefined
-      catalogueUrl = catalogue?.endpoint
+      }, message => server.debug(message))
+      catalogueUrl = catalogue.endpoint
       let active: GribStore
 
       // Register/unregister weather providers to follow discovered sources.
@@ -149,23 +129,22 @@ module.exports = (server: PluginApp): Plugin => {
       const onScan = (summary: ScanSummary) => {
         if (store !== active) return
         lastSummary = summary
-        syncProviders(summary.sources.filter(s => inputMode === 'local' || s.slices > 0).map(s => s.name))
+        syncProviders(summary.sources.filter(s => s.slices > 0).map(s => s.name))
         const parts = summary.sources.map(s => `${s.name}: ${s.slices} slice(s)`)
         if (summary.errors.length > 0) {
           server.setPluginStatus(`${parts.join(', ') || 'no sources'} — ${summary.errors.length} error(s), see debug log`)
         } else {
-          server.setPluginStatus(parts.join(', ') || (inputMode === 'catalogue' ? 'no GRIB forecasts in catalogue' : `no sources found in ${rootDirectory}`))
+          server.setPluginStatus(parts.join(', ') || 'no GRIB forecasts in catalogue')
         }
       }
 
       active = new GribStore(
-        rootDirectory,
         cacheRoot,
         (msg: string) => server.debug(msg),
         onScan,
         {
-          sourceProvider: catalogue ? signal => catalogue.refresh(signal) : undefined,
-          snapshotFile: catalogue ? path.join(cacheRoot, `.weather-index-${createHash('sha256').update(catalogue.endpoint).digest('hex').slice(0, 16)}.json`) : undefined,
+          sourceProvider: signal => catalogue.refresh(signal),
+          snapshotFile: path.join(cacheRoot, `.weather-index-${createHash('sha256').update(catalogue.endpoint).digest('hex').slice(0, 16)}.json`),
           maxConcurrentIngests: Math.max(1, Math.floor(options.maxConcurrentIngests ?? 2)),
           sliceCacheSizeMB: options.sliceCacheSizeMB ?? 64,
         }
@@ -196,7 +175,7 @@ module.exports = (server: PluginApp): Plugin => {
       })
       router.get('/status', (_req: any, res: any) => {
         if (!store) return res.status(503).json({ error: 'plugin not started' })
-        res.json({ inputMode, catalogueUrl, ...lastSummary })
+        res.json({ inputMode: 'catalogue', catalogueUrl, ...lastSummary })
       })
     },
   }

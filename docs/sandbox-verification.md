@@ -63,6 +63,13 @@ independent and remain available to other consumers.
 
 ## Scope
 
+The subsequent catalogue-only review removed local input and added a real
+same-asset-name replacement regression. The updated suite passes all 55 tests
+on the sandbox's Node 24 runtime in an isolated temporary directory. This
+follow-up code has not yet replaced the installed package. The installation
+helper now removes obsolete `inputMode` and `rootDirectory` configuration fields;
+the other configuration values remain intact.
+
 The consumer still uses its existing regular-latitude/longitude decoder,
 interpolation, precipitation handling and Weather API mapping. It does not add
 processor dispatch, server-side subsets, catalogue inventory enrichment, daily

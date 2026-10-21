@@ -1,21 +1,17 @@
-// Sources are catalogue acquisitions, or directories in explicit local mode.
-// Its directory name is the provider ID suffix and display name.
+// Sources are complete, verified catalogue acquisitions.
 export interface SourceConfig {
-  files?: string[]      // explicit, verified catalogue assets (no directory scanning)
-  datasetId?: string
-  version?: string
-  name: string         // directory name — provider ID suffix and index key
-  directory: string    // <rootDirectory>/<name>
+  files: string[]      // explicit, verified catalogue assets
+  datasetId: string
+  version: string
+  name: string         // provider ID suffix and index key
   cacheDirectory: string  // <cacheRoot>/<name>
 }
 
 export interface PluginSettings {
-  inputMode?: 'catalogue' | 'local'
   catalogueUrl?: string
   catalogueTokenFile?: string
   maxAssetBytes?: number
   maxCatalogueCacheBytes?: number
-  rootDirectory?: string         // parent directory of all GRIB sources
   cacheRoot?: string             // where .gribcache trees live (default: plugin data dir)
   scanIntervalMinutes?: number
   maxConcurrentIngests?: number  // cap on simultaneous GRIB→cache conversions

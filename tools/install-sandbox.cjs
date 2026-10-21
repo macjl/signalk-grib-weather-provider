@@ -103,9 +103,9 @@ async function main() {
     if (lock.packages['']) lock.packages[''].dependencies[name] = `file:${relative}`
     atomic(full, lock)
   }
-  // Explicitly switch the installed sandbox provider to catalogue input.
-  // All other existing plugin settings remain unchanged.
-  config.configuration.inputMode = 'catalogue'
+  // Catalogue input is mandatory. Remove obsolete source-selection settings.
+  delete config.configuration.inputMode
+  delete config.configuration.rootDirectory
   atomic(path.join(configDir, name + '.json'), config)
   fs.rmSync(previous, { recursive: true })
   fs.writeFileSync(path.join(root, 'local-packages/grib-weather-forecast-backup.json'), JSON.stringify({ backup, previous, version: pkg.version }))

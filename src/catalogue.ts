@@ -72,7 +72,7 @@ export class CatalogueClient {
   }
   private sources(datasets: Dataset[]): SourceConfig[] {
     return datasets.map(dataset => ({
-      name: this.sourceName(dataset), directory: this.folder(dataset),
+      name: this.sourceName(dataset),
       cacheDirectory: path.join(this.options.cacheRoot, this.sourceName(dataset)),
       files: dataset.assets.map(a => this.assetFile(dataset, a)),
       datasetId: dataset.id, version: dataset.version,

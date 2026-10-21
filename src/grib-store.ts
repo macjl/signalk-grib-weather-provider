@@ -6,7 +6,6 @@ import { readCacheHeader, queryAtPosition, queryAtPositionSync, evictStaleCache,
 import { toWeatherData } from './weather-mapper'
 import { ingestGrib, gribBasename, CACHE_FILE_RE } from './ingest-manager'
 
-const GRIB_EXTENSIONS = new Set(['.grb2', '.grib2', '.grb', '.grib'])
 const DEFAULT_MAX_CONCURRENT_INGESTS = 2
 const DEFAULT_SLICE_CACHE_MB = 64
 
@@ -16,7 +15,7 @@ export interface ScanSummary {
 }
 
 export interface GribStoreOptions {
-  sourceProvider?: (signal: AbortSignal) => Promise<{ sources: SourceConfig[]; errors: string[] }>
+  sourceProvider: (signal: AbortSignal) => Promise<{ sources: SourceConfig[]; errors: string[] }>
   snapshotFile?: string
   maxConcurrentIngests?: number
   sliceCacheSizeMB?: number
@@ -44,16 +43,15 @@ export class GribStore {
   private scanTask: Promise<void> | null = null
   private stopped = false
   private controller = new AbortController()
-  private sourceProvider?: GribStoreOptions['sourceProvider']
+  private sourceProvider: GribStoreOptions['sourceProvider']
   private snapshotFile?: string
   private references = new Map<string, { datasetId?: string; version?: string }>()
 
   constructor(
-    private rootDirectory: string,
     private cacheRoot: string,
     private log: (msg: string) => void,
-    private onScan?: (summary: ScanSummary) => void,
-    options: GribStoreOptions = {}
+    private onScan: ((summary: ScanSummary) => void) | undefined,
+    options: GribStoreOptions
   ) {
     this.sourceProvider = options.sourceProvider
     this.snapshotFile = options.snapshotFile
@@ -64,25 +62,6 @@ export class GribStore {
   }
 
   private maxConcurrentIngests: number
-
-  // Each non-hidden subdirectory of rootDirectory is a source. Its name is
-  // the provider ID suffix and display name; caches mirror it under cacheRoot.
-  private discoverSources(): SourceConfig[] {
-    let entries: fs.Dirent[]
-    try {
-      entries = fs.readdirSync(this.rootDirectory, { withFileTypes: true })
-    } catch {
-      throw new Error(`Cannot read root directory: ${this.rootDirectory}`)
-    }
-    return entries
-      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-      .map(e => ({
-        name: e.name,
-        directory: path.join(this.rootDirectory, e.name),
-        cacheDirectory: path.join(this.cacheRoot, e.name),
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-  }
 
   async start(scanIntervalMinutes = 5): Promise<void> {
     if (this.snapshotFile) {
@@ -225,11 +204,9 @@ export class GribStore {
     const summary: ScanSummary = { sources: [], errors: [] }
     let sources: SourceConfig[]
     try {
-      if (this.sourceProvider) {
-        const result = await this.sourceProvider(this.controller.signal)
-        sources = result.sources
-        summary.errors.push(...result.errors)
-      } else sources = this.discoverSources()
+      const result = await this.sourceProvider(this.controller.signal)
+      sources = result.sources
+      summary.errors.push(...result.errors)
     } catch (err) {
       summary.errors.push(String(err))
       this.log(String(err))
@@ -256,7 +233,7 @@ export class GribStore {
 
     if (this.stopped) return
 
-    // Drop index entries and cache trees of sources whose directory is gone
+    // Drop index entries and cache trees of sources removed from the catalogue.
     const names = new Set(sources.map(s => s.name))
     for (const name of [...this.index.keys()]) {
       if (!names.has(name)) {
@@ -310,24 +287,11 @@ export class GribStore {
 
   // Returns the number of indexed slices for the source.
   private async scanSource(source: SourceConfig): Promise<number> {
-    const gribDir  = source.directory
     const cacheDir = source.cacheDirectory
-
-    // List GRIB files → map basename → full path
-    let gribFiles: string[]
-    const catalogue = source.files !== undefined
-    if (catalogue) gribFiles = source.files!
-    else try {
-      gribFiles = fs.readdirSync(gribDir)
-        .filter(f => GRIB_EXTENSIONS.has(path.extname(f).toLowerCase()))
-        .map(f => path.join(gribDir, f))
-    } catch {
-      throw new Error(`Cannot read directory: ${gribDir}`)
-    }
+    const gribFiles = source.files
     const gribBasenames = new Set(gribFiles.map(gribBasename))
 
-    // Purge: remove cache files that are legacy-format (no .t<stamp> suffix)
-    // or whose source GRIB no longer exists.
+    // Only a completed conversion receipt authorizes reuse of decoded slices.
     let cacheListing: string[]
     try {
       cacheListing = fs.readdirSync(cacheDir)
@@ -335,13 +299,11 @@ export class GribStore {
       cacheListing = []  // cache dir may not exist yet — ingest creates it
     }
     const ingestedBasenames = new Set<string>()
-    if (catalogue) {
-      for (const base of gribBasenames) {
-        try {
-          const receipt = JSON.parse(fs.readFileSync(path.join(cacheDir, `.${base}.complete`), 'utf8')) as string[]
-          if (receipt.length && receipt.every(file => CACHE_FILE_RE.exec(file)?.[1] === base && fs.existsSync(path.join(cacheDir, file)))) ingestedBasenames.add(base)
-        } catch { /* retry incomplete conversions */ }
-      }
+    for (const base of gribBasenames) {
+      try {
+        const receipt = JSON.parse(fs.readFileSync(path.join(cacheDir, `.${base}.complete`), 'utf8')) as string[]
+        if (receipt.length && receipt.every(file => CACHE_FILE_RE.exec(file)?.[1] === base && fs.existsSync(path.join(cacheDir, file)))) ingestedBasenames.add(base)
+      } catch { /* retry incomplete conversions */ }
     }
     for (const f of cacheListing) {
       if (f.endsWith('.gribcache.tmp')) {
@@ -355,15 +317,6 @@ export class GribStore {
         } catch { /* vanished meanwhile */ }
         continue
       }
-      if (!f.endsWith('.gribcache')) continue
-      const m = CACHE_FILE_RE.exec(f)
-      if (m && gribBasenames.has(m[1])) {
-        if (!catalogue) ingestedBasenames.add(m[1])
-      } else if (!catalogue) {
-        const stale = path.join(cacheDir, f)
-        this.log(`Purging stale cache file: ${f}`)
-        fs.promises.unlink(stale).catch(err => this.log(`Cannot purge ${f}: ${err}`))
-      }
     }
 
     // Ingest GRIB files that have no cache slices yet — bounded concurrency
@@ -372,21 +325,20 @@ export class GribStore {
     await mapLimit(toIngest, this.maxConcurrentIngests, async gribPath => {
       if (this.stopped) return
       try {
-        if (catalogue) await this.ingestCatalogueAsset(gribPath, cacheDir)
-        else await ingestGrib(gribPath, cacheDir, this.log)
+        await this.ingestCatalogueAsset(gribPath, cacheDir)
       } catch (error) {
         failures.push(String(error))
         this.log(`Ingest failed for ${path.basename(gribPath)}: ${error}`)
       }
     })
     this.controller.signal.throwIfAborted()
-    if (catalogue && failures.length) throw new Error(`${failures.length} catalogue asset(s) could not be decoded; retaining previous forecasts`)
+    if (failures.length) throw new Error(`${failures.length} catalogue asset(s) could not be decoded; retaining previous forecasts`)
 
     // Re-read cache directory and build index
     let cacheFiles: string[]
     try {
       cacheFiles = fs.readdirSync(cacheDir)
-        .filter(f => CACHE_FILE_RE.test(f) && (!catalogue || gribBasenames.has(CACHE_FILE_RE.exec(f)![1])))
+        .filter(f => CACHE_FILE_RE.test(f) && gribBasenames.has(CACHE_FILE_RE.exec(f)![1]))
         .map(f => path.join(cacheDir, f))
     } catch {
       throw new Error(`Cannot read cache directory: ${cacheDir}`)
@@ -398,14 +350,9 @@ export class GribStore {
         const meta = await readCacheHeader(filePath)
         parsed.push({ filePath, meta, validAtISO: meta.validAt.toISOString() })
       } catch (err) {
-        if (catalogue) {
-          const base = CACHE_FILE_RE.exec(path.basename(filePath))![1]
-          await fs.promises.rm(path.join(cacheDir, `.${base}.complete`), { force: true })
-          throw err
-        }
-        // Unreadable or outdated format — delete so the GRIB gets re-ingested
-        this.log(`Purging unreadable cache file ${path.basename(filePath)}: ${err}`)
-        fs.promises.unlink(filePath).catch(() => {})
+        const base = CACHE_FILE_RE.exec(path.basename(filePath))![1]
+        await fs.promises.rm(path.join(cacheDir, `.${base}.complete`), { force: true })
+        throw err
       }
     }
 
@@ -425,13 +372,11 @@ export class GribStore {
 
     this.controller.signal.throwIfAborted()
     this.index.set(source.name, entries)
-    if (catalogue) {
-      for (const file of await fs.promises.readdir(cacheDir)) {
-        const base = CACHE_FILE_RE.exec(file)?.[1]
-        const receiptBase = /^\.(.+)\.complete$/.exec(file)?.[1]
-        if ((base && !gribBasenames.has(base)) || (receiptBase && !gribBasenames.has(receiptBase))) {
-          await fs.promises.rm(path.join(cacheDir, file), { force: true })
-        }
+    for (const file of await fs.promises.readdir(cacheDir)) {
+      const base = CACHE_FILE_RE.exec(file)?.[1]
+      const receiptBase = /^\.(.+)\.complete$/.exec(file)?.[1]
+      if ((base && !gribBasenames.has(base)) || (receiptBase && !gribBasenames.has(receiptBase))) {
+        await fs.promises.rm(path.join(cacheDir, file), { force: true })
       }
     }
     this.log(`Source "${source.name}": ${entries.length} slice(s) indexed (${parsed.length} cache files)`)

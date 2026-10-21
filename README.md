@@ -9,7 +9,7 @@ local caches. No shared downloader/provider directory is needed.
 Downloader sources keep their selectable provider IDs, for example
 `signalk-grib-weather-provider:gfs-0p25`, so existing Weather API clients such as
 [signalk-weather-map](https://github.com/macjl/signalk-weather-map) keep working.
-An explicit `local` input mode remains available for legacy GRIB directories.
+The catalogue is the only input. Shared GRIB directory scanning is no longer supported.
 
 ## How it works
 
@@ -59,8 +59,7 @@ case it should be read as surface temperature, not as actual water temperature.
 
 Precipitation is de-cumulated within accumulation buckets and normalised to
 **volume per hour**, so values are comparable across models and timestep sizes.
-Catalogue mode uses one complete selected acquisition per source. Local mode
-retains the existing newest-run-per-validity selection. Private original and
+The provider uses one complete selected acquisition per source. Private original and
 decoded caches are pruned after successful catalogue discovery/replacement.
 
 ## Requirements
@@ -75,13 +74,11 @@ No container runtime or external ecCodes image is needed by the plugin.
 
 | Option | Description |
 |---|---|
-| `inputMode` | `catalogue` by default; `local` explicitly enables legacy directory scanning. |
 | `catalogueUrl` | Signal K base URL, default `http://127.0.0.1:3000`. Remote servers require HTTPS. |
 | `catalogueTokenFile` | Absolute path to a readonly application token, default `<plugin data directory>/catalogue-token`. Store with mode `0600` for the server user. The file is reread for token rotation; contents never enter status or logs. |
 | `maxAssetBytes` | Maximum bytes per selected GRIB asset, default 2 GiB. |
 | `maxCatalogueCacheBytes` | Maximum original bytes in one selected catalogue snapshot, default 8 GiB. This is not a total disk quota; old/new copies may coexist while transferring. |
-| `rootDirectory` | Parent of source directories in **local mode only**, default `~/.signalk/gribs`. `~` is expanded. |
-| `cacheRoot` | Decoded-cache root, default `<plugin data directory>/cache`. Catalogue mode uses its `catalogue/` child so legacy caches remain intact. |
+| `cacheRoot` | Decoded-cache root, default `<plugin data directory>/cache`. Its `catalogue/` child holds decoded acquisitions. |
 | `scanIntervalMinutes` | Discovery and conversion interval, default 5 minutes. |
 | `maxConcurrentIngests` | Conversion concurrency, default 2. Each job loads full grids into memory. |
 | `sliceCacheSizeMB` | RAM budget for decoded point-query buffers, default 64 MiB. |
@@ -107,11 +104,13 @@ Scans are serialized; plugin stop aborts HTTP transfers and waits for the scan.
 Original bytes live in `<plugin data directory>/catalogue-assets/`. Content
 versions and asset identities form cache names, so replacing an acquisition
 cannot silently reuse slices from different original bytes. Old caches from
-0.6.x remain available for an explicit switch back to local mode or rollback.
+0.6.x are left untouched for a rollback to the previous plugin version.
 
-In local mode, each non-hidden subdirectory of `rootDirectory` becomes a source,
-with `.grb2`, `.grib2`, `.grb` or `.grib` inputs. Local scan/forecast behavior is
-otherwise unchanged. Failed conversions retry up to five times per file path
+When upgrading, configure the catalogue connection and its readonly token. Old
+`inputMode` and `rootDirectory` configuration fields are ignored; they never
+enable directory scanning or a fallback when the catalogue is unavailable.
+Existing files must be published by a catalogue producer before they are eligible.
+Failed conversions retry up to five times per file path
 and process lifetime; a server restart or a new content version allows retry.
 
 ## Development and verification
@@ -125,7 +124,9 @@ npm pack
 Run on Node 24+ for the full suite. Older developer runtimes explicitly skip
 WebAssembly functional tests. Tests cover real GRIB decoding from catalogue
 HTTP assets, hashes, pagination, asset-level resume, offline restart, failed
-replacement recovery, source deletion, serialization and cancellation.
+replacement recovery, source deletion, serialization and cancellation. A real
+GRIB regression test replaces a regional asset with a global asset under the
+same original asset name, checks warm-cache invalidation and an offline restart.
 See [sandbox verification](docs/sandbox-verification.md) for live deployment
 and Weather API parity checks.
 

@@ -16,8 +16,10 @@ All notable changes to this project will be documented in this file.
   conversion keeps the previous index; complete source replacements are atomic.
 - Serialize scans, abort transfers and await ongoing scans on stop; expose
   operational status and immediate-refresh endpoints.
-- Default to catalogue mode, with an explicit legacy `local` input mode. Require
-  Forecast Dataset Provider for normal catalogue operation and keep Node 24+.
+- Use the catalogue as the only input; remove local directory scanning and its
+  `inputMode`/`rootDirectory` settings. Require Forecast Dataset Provider and Node 24+.
+- Cover changed content under the same original asset name, including warmed
+  slice buffers, replacement coverage and offline restart (PR #17 scenario).
 - Add catalogue transport/lifecycle tests and real GRIB-to-Weather API coverage.
 
 

@@ -56,7 +56,8 @@ async function main() {
   const beforeConfig = JSON.parse(fs.readFileSync(path.join(marker.backup, 'weather-config.json')))
   const afterConfig = JSON.parse(fs.readFileSync(path.join(root, 'plugin-config-data', name + '.json')))
   const expected = structuredClone(beforeConfig)
-  expected.configuration.inputMode = 'catalogue'
+  delete expected.configuration.inputMode
+  delete expected.configuration.rootDirectory
   assert.deepEqual(afterConfig, expected)
   const baseline = JSON.parse(fs.readFileSync(path.join(marker.backup, 'weather-baseline.json')))
   const forecasts = await get(baseline.route, adminHeaders)

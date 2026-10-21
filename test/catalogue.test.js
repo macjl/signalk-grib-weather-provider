@@ -45,8 +45,8 @@ async function fixture(t) {
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }) })
   const options = { url: `http://127.0.0.1:${server.address().port}`, tokenFile, directory: path.join(root, 'assets'), cacheRoot: path.join(root, 'decoded') }
   const client = () => new CatalogueClient(options, () => {})
-  const add = (source = 'gfs-0p25', run = '2026-10-21T00:00:00Z', bytes = [Buffer.from('GRIB-one'), Buffer.from('GRIB-two')]) => {
-    const id = randomUUID(), version = createHash('sha256').update(Buffer.concat(bytes)).digest('hex')
+  const add = (source = 'gfs-0p25', run = '2026-10-21T00:00:00Z', bytes = [Buffer.from('GRIB-one'), Buffer.from('GRIB-two')], id = randomUUID()) => {
+    const version = createHash('sha256').update(Buffer.concat(bytes)).digest('hex')
     const record = { id, version, producer: 'signalk-grib-downloader', format: 'grib2', kind: 'forecast', state: 'complete', run, createdAt: run, requested: { source }, assets: bytes.map((b, i) => ({ id: `part-${i}`, size: b.length, sha256: createHash('sha256').update(b).digest('hex'), href: `/plugins/signalk-forecast-dataset-provider/datasets/${id}/versions/${version}/assets/part-${i}` })) }
     records.set(id, record)
     record.assets.forEach((a, i) => content.set(a.href, bytes[i]))
@@ -151,7 +151,7 @@ test('real catalogue GRIB decodes into Weather API forecasts and survives an off
   const snapshotFile = path.join(f.options.cacheRoot, '.index.json')
   const createStore = () => {
     const client = f.client()
-    return new GribStore('/deliberately-missing-shared-gribs', f.options.cacheRoot, () => {}, s => { summary = s }, { sourceProvider: signal => client.refresh(signal), snapshotFile })
+    return new GribStore(f.options.cacheRoot, () => {}, s => { summary = s }, { sourceProvider: signal => client.refresh(signal), snapshotFile })
   }
   let store = createStore()
   t.after(() => store.stop())
@@ -199,6 +199,68 @@ test('unknown producers retain independent dataset provider identities', async t
   assert.ok(result.sources.some(s => s.name === `dataset-${second.id}`))
 })
 
+test('retired local settings cannot bypass catalogue discovery', { timeout: 10000 }, async t => {
+  const f = await fixture(t)
+  const makePlugin = require('../dist/index')
+  const oldRoot = path.join(f.root, 'old-shared-gribs')
+  fs.mkdirSync(path.join(oldRoot, 'legacy-source'), { recursive: true })
+  fs.writeFileSync(path.join(oldRoot, 'legacy-source', 'run.grib2'), 'not a catalogue asset')
+  const registered = []
+  let settled, failed
+  const ready = new Promise((resolve, reject) => { settled = resolve; failed = reject })
+  const plugin = makePlugin({
+    getDataDirPath: () => f.root, debug: () => {},
+    weatherApi: { register: name => registered.push(name), unRegister: () => {} },
+    setPluginStatus: message => { if (message === 'no GRIB forecasts in catalogue') settled() },
+    setPluginError: message => failed(new Error(message)),
+  })
+  t.after(() => plugin.stop())
+  const schema = plugin.schema()
+  assert.equal(schema.properties.inputMode, undefined)
+  assert.equal(schema.properties.rootDirectory, undefined)
+  plugin.start({ inputMode: 'local', rootDirectory: oldRoot, catalogueUrl: f.options.url, catalogueTokenFile: f.options.tokenFile })
+  await ready
+  assert.deepEqual(registered, [])
+  assert.ok(f.requests.some(r => r.route.endsWith('/datasets')))
+  assert.ok(fs.existsSync(path.join(oldRoot, 'legacy-source', 'run.grib2')))
+})
+
+test('same original asset name with changed content replaces warm decoded caches and survives restart', { skip: Number(process.versions.node.split('.')[0]) < 24 }, async t => {
+  const f = await fixture(t)
+  const first = f.add('gfs-0p25', '2026-10-21T00:00:00Z', [fs.readFileSync(path.join(__dirname, 'fixtures/gfs.t00z.pgrb2.1p00.850.grb2'))])
+  const snapshotFile = path.join(f.options.cacheRoot, '.index.json')
+  let summary
+  const createStore = () => {
+    const client = f.client()
+    return new GribStore(f.options.cacheRoot, () => {}, s => { summary = s }, { sourceProvider: signal => client.refresh(signal), snapshotFile })
+  }
+  let store = createStore()
+  t.after(() => store.stop())
+  const query = position => store.getForecastsForSource('gfs-0p25', position, 'point', { startDate: '2020-01-01', maxCount: 1 })
+  await store.start(120)
+  const tasman = { latitude: -35, longitude: 165 }, paris = { latitude: 49, longitude: 2 }
+  assert.equal((await query(tasman)).length, 1, 'prime the old slice buffer')
+  assert.deepEqual(await query(paris), [], 'the first acquisition covers only the Tasman area')
+  const oldSlices = fs.readdirSync(path.join(f.options.cacheRoot, 'gfs-0p25')).filter(f => f.endsWith('.gribcache'))
+  const replacement = f.add('gfs-0p25', first.run, [fs.readFileSync(path.join(__dirname, 'fixtures/gfs.t00z.pgrb2.1p00.sample.grb2'))], first.id)
+  assert.equal(replacement.assets[0].id, first.assets[0].id, 'the producer keeps the same asset name')
+  assert.notEqual(replacement.version, first.version)
+  await store.refresh()
+  assert.deepEqual(summary.errors, [])
+  assert.equal(summary.sources[0].version, replacement.version)
+  const updated = await query(paris)
+  assert.equal(updated.length, 1, 'the replacement global grid now serves the new area')
+  assert.ok(oldSlices.every(file => !fs.existsSync(path.join(f.options.cacheRoot, 'gfs-0p25', file))))
+  const currentSlices = fs.readdirSync(path.join(f.options.cacheRoot, 'gfs-0p25')).filter(f => f.endsWith('.gribcache'))
+  await store.refresh()
+  assert.deepEqual(fs.readdirSync(path.join(f.options.cacheRoot, 'gfs-0p25')).filter(f => f.endsWith('.gribcache')), currentSlices)
+  await store.stop()
+  f.unavailable(true)
+  store = createStore()
+  await store.start(120)
+  assert.deepEqual(await query(paris), updated, 'the new acquisition remains active on an offline restart')
+})
+
 test('selected snapshot byte limit is enforced before downloading assets', async t => {
   const f = await fixture(t)
   f.add()
@@ -210,7 +272,7 @@ test('selected snapshot byte limit is enforced before downloading assets', async
 test('scans do not overlap and stopping aborts discovery without publishing callbacks', async () => {
   let started, calls = 0, callbacks = 0
   const ready = new Promise(resolve => { started = resolve })
-  const store = new GribStore('/unused', '/unused', () => {}, () => { callbacks++ }, {
+  const store = new GribStore('/unused', () => {}, () => { callbacks++ }, {
     sourceProvider: signal => new Promise((_resolve, reject) => {
       calls++; started()
       signal.addEventListener('abort', () => reject(signal.reason), { once: true })
