@@ -140,7 +140,7 @@ test('discovery paginates and selects the newest acquisition per downloader sour
 test('catalogue limits and endpoints are validated', () => {
   const options = { directory: '/tmp', cacheRoot: '/tmp', tokenFile: '' }
   for (const url of ['http://remote.test', 'https://user:password@remote.test', 'https://remote.test?token=x']) assert.throws(() => new CatalogueClient({ ...options, url }, () => {}))
-  assert.throws(() => new CatalogueClient({ ...options, url: 'http://127.0.0.1:3000', maxAssetBytes: -1 }, () => {}))
+  assert.throws(() => new CatalogueClient({ ...options, url: 'http://127.0.0.1:3000', maxAssetMB: -1 }, () => {}))
 })
 
 test('real catalogue GRIB decodes into Weather API forecasts and survives an offline restart', { skip: Number(process.versions.node.split('.')[0]) < 24 }, async t => {
@@ -261,10 +261,10 @@ test('same original asset name with changed content replaces warm decoded caches
   assert.deepEqual(await query(paris), updated, 'the new acquisition remains active on an offline restart')
 })
 
-test('selected snapshot byte limit is enforced before downloading assets', async t => {
+test('selected snapshot MB limit is enforced before downloading assets', async t => {
   const f = await fixture(t)
   f.add()
-  const client = new CatalogueClient({ ...f.options, maxCacheBytes: 1 }, () => {})
+  const client = new CatalogueClient({ ...f.options, maxCatalogueCacheMB: 0.000001 }, () => {})
   await assert.rejects(client.refresh(f.signal), /byte limit/)
   assert.equal(f.requests.filter(r => /\/assets\/part/.test(r.route)).length, 0)
 })
@@ -285,4 +285,39 @@ test('scans do not overlap and stopping aborts discovery without publishing call
   await Promise.all([starting, concurrent])
   assert.equal(calls, 1)
   assert.equal(callbacks, 0)
+})
+
+test('asset limits use decimal MB: one million bytes fit in 1 MB, the next byte is rejected', async t => {
+  for (const size of [1_000_000, 1_000_001]) {
+    const f = await fixture(t)
+    const bytes = Buffer.alloc(size, 1); bytes.write('GRIB')
+    f.add('gfs-0p25', '2026-10-21T00:00:00Z', [bytes])
+    const client = new CatalogueClient({ ...f.options, maxAssetMB: 1 }, () => {})
+    if (size === 1_000_000) {
+      const result = await client.refresh(f.signal)
+      assert.deepEqual(result.errors, [])
+      assert.equal(fs.statSync(result.sources[0].files[0]).size, size)
+    } else {
+      await assert.rejects(client.refresh(f.signal), /oversized catalogue asset/)
+      assert.equal(f.requests.filter(r => /\/assets\/part/.test(r.route)).length, 0)
+    }
+  }
+})
+
+test('invalid MB limits fail before any catalogue request', async t => {
+  const f = await fixture(t)
+  for (const key of ['maxAssetMB', 'maxCatalogueCacheMB']) {
+    for (const value of [0, -1, NaN, Infinity, '2', 0.0000001, Number.MAX_SAFE_INTEGER]) {
+      assert.throws(() => new CatalogueClient({ ...f.options, [key]: value }, () => {}), /MB limits/)
+    }
+  }
+  assert.equal(f.requests.length, 0)
+})
+
+test('retired byte settings are ignored and new defaults permit an ordinary acquisition', async t => {
+  const f = await fixture(t); f.add()
+  const client = new CatalogueClient({ ...f.options, maxAssetBytes: 1, maxCatalogueCacheBytes: 1, maxCacheBytes: 1 }, () => {})
+  const result = await client.refresh(f.signal)
+  assert.deepEqual(result.errors, [])
+  assert.equal(result.sources[0].files.length, 2)
 })

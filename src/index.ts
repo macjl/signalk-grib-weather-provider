@@ -30,8 +30,8 @@ const buildSchema = () => ({
       type: 'string', title: 'Readonly catalogue token file', default: '',
       description: 'Token file, default <plugin data directory>/catalogue-token. When missing, approve the automatic readonly request in Signal K Security > Access Requests. Contents are never exposed in status or logs.',
     },
-    maxAssetBytes: { type: 'integer', title: 'Maximum bytes per catalogue asset', minimum: 1, default: 2 * 1024 ** 3 },
-    maxCatalogueCacheBytes: { type: 'integer', title: 'Maximum bytes in a selected catalogue snapshot', minimum: 1, default: 8 * 1024 ** 3 },
+    maxAssetMB: { type: 'number', title: 'Maximum size per catalogue asset (MB)', description: '1 MB = 1,000,000 bytes. Decimal values are allowed.', minimum: 0.000001, default: 2000 },
+    maxCatalogueCacheMB: { type: 'number', title: 'Maximum size of selected catalogue assets (MB)', description: 'Combined original file sizes in one selected snapshot, not a global disk quota. 1 MB = 1,000,000 bytes.', minimum: 0.000001, default: 8000 },
     cacheRoot: {
       type: 'string',
       title: 'Cache root directory (optional)',
@@ -96,7 +96,7 @@ module.exports = (server: PluginApp): Plugin => {
       const catalogue = new CatalogueClient({
         url: options.catalogueUrl || 'http://127.0.0.1:3000', tokenFile,
         directory: path.join(server.getDataDirPath(), 'catalogue-assets'), cacheRoot,
-        maxAssetBytes: options.maxAssetBytes, maxCacheBytes: options.maxCatalogueCacheBytes,
+        maxAssetMB: options.maxAssetMB, maxCatalogueCacheMB: options.maxCatalogueCacheMB,
         tokenReader: () => authorizer.token(),
         onUnauthorized: token => authorizer.rejected(token),
       }, message => server.debug(message))

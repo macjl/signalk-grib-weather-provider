@@ -15,7 +15,13 @@ interface Dataset {
   run?: string; createdAt: string; requested?: { source?: string }; assets: Asset[]
 }
 interface Mirror { endpoint: string; datasets: Dataset[] }
-export interface CatalogueOptions { url: string; tokenFile: string; directory: string; cacheRoot: string; maxAssetBytes?: number; maxCacheBytes?: number; tokenReader?: () => string; onUnauthorized?: (token: string) => void }
+export interface CatalogueOptions { url: string; tokenFile: string; directory: string; cacheRoot: string; maxAssetMB?: number; maxCatalogueCacheMB?: number; tokenReader?: () => string; onUnauthorized?: (token: string) => void }
+
+function megabytes(value: number): number {
+  const bytes = Math.floor(value * 1_000_000)
+  if (!Number.isFinite(value) || !Number.isSafeInteger(bytes) || bytes < 1) throw new Error('Catalogue MB limits must be positive numbers within the supported byte range')
+  return bytes
+}
 
 export class CatalogueClient {
   readonly endpoint: string
@@ -28,9 +34,8 @@ export class CatalogueClient {
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Catalogue URL must be HTTP(S), without credentials, query or fragment')
     if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) throw new Error('Remote catalogue servers require HTTPS')
     this.endpoint = url.href.replace(/\/$/, '')
-    this.maxAssetBytes = options.maxAssetBytes ?? 2 * 1024 ** 3
-    this.maxCacheBytes = options.maxCacheBytes ?? 8 * 1024 ** 3
-    for (const n of [this.maxAssetBytes, this.maxCacheBytes]) if (!Number.isSafeInteger(n) || n < 1) throw new Error('Catalogue byte limits must be positive integers')
+    this.maxAssetBytes = megabytes(options.maxAssetMB ?? 2000)
+    this.maxCacheBytes = megabytes(options.maxCatalogueCacheMB ?? 8000)
   }
 
   private headers(): Record<string, string> {

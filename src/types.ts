@@ -10,8 +10,8 @@ export interface SourceConfig {
 export interface PluginSettings {
   catalogueUrl?: string
   catalogueTokenFile?: string
-  maxAssetBytes?: number
-  maxCatalogueCacheBytes?: number
+  maxAssetMB?: number
+  maxCatalogueCacheMB?: number
   cacheRoot?: string             // where .gribcache trees live (default: plugin data dir)
   scanIntervalMinutes?: number
   maxConcurrentIngests?: number  // cap on simultaneous GRIB→cache conversions

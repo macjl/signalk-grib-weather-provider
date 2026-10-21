@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0-beta.3] - 2026-10-21
+
+- Configure catalogue size limits in decimal MB (1 MB = 1,000,000 bytes), with
+  defaults of 2000 MB per asset and 8000 MB per selected snapshot.
+- Remove the old byte-valued settings without migrating or converting them.
+- Validate positive finite limits and enforce the exact decimal-byte boundary
+  before downloading oversized assets.
+
 ## [0.7.0-beta.2] - 2026-10-21
 
 - Request catalogue access automatically through Signal K Access Requests when

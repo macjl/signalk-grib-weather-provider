@@ -76,12 +76,16 @@ No container runtime or external ecCodes image is needed by the plugin.
 |---|---|
 | `catalogueUrl` | Signal K base URL, default `http://127.0.0.1:3000`. Remote servers require HTTPS. |
 | `catalogueTokenFile` | Absolute path to a readonly application token, default `<plugin data directory>/catalogue-token`. Store with mode `0600` for the server user. The file is reread for token rotation; contents never enter status or logs. |
-| `maxAssetBytes` | Maximum bytes per selected GRIB asset, default 2 GiB. |
-| `maxCatalogueCacheBytes` | Maximum original bytes in one selected catalogue snapshot, default 8 GiB. This is not a total disk quota; old/new copies may coexist while transferring. |
+| `maxAssetMB` | Maximum size per selected GRIB asset, default 2000 MB. 1 MB = 1,000,000 bytes; decimals are allowed. |
+| `maxCatalogueCacheMB` | Maximum combined original file sizes in one selected catalogue snapshot, default 8000 MB. This is not a total disk quota; old/new copies may coexist while transferring. |
 | `cacheRoot` | Decoded-cache root, default `<plugin data directory>/cache`. Its `catalogue/` child holds decoded acquisitions. |
 | `scanIntervalMinutes` | Discovery and conversion interval, default 5 minutes. |
 | `maxConcurrentIngests` | Conversion concurrency, default 2. Each job loads full grids into memory. |
 | `sliceCacheSizeMB` | RAM budget for decoded point-query buffers, default 64 MiB. |
+
+Size limits now use **MB** (1 MB = 1,000,000 bytes). The former byte-valued
+settings are ignored; there is no migration. Configure the new MB fields or
+leave their new defaults of 2000 and 8000 MB.
 
 When the token file is missing, the plugin automatically requests **readonly**
 access. On the catalogue server's Signal K Admin UI, open **Security → Access
