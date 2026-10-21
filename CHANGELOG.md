@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0-beta.3] - 2026-10-21
+
+- Configure catalogue size limits in decimal MB (1 MB = 1,000,000 bytes), with
+  defaults of 2000 MB per asset and 8000 MB per selected snapshot.
+- Remove the old byte-valued settings without migrating or converting them.
+- Validate positive finite limits and enforce the exact decimal-byte boundary
+  before downloading oversized assets.
+
+## [0.7.0-beta.2] - 2026-10-21
+
+- Request catalogue access automatically through Signal K Access Requests when
+  no token is configured; require administrator approval with this plugin's
+  least-privilege permissions and persist the token privately.
+- Resume pending requests across restarts, report waiting/denied states and
+  resume catalogue work immediately after approval. Stop polling on plugin stop.
+- Renew automatically issued tokens rejected with HTTP 401 while preserving
+  manually configured or concurrently rotated tokens.
+- Cover the access lifecycle, plugin startup and approval-driven resumption;
+  validate both permission levels against an actual Signal K server.
+
+## [0.7.0-beta.1] - 2026-10-21
+
+- Discover complete GRIB forecast datasets through Forecast Dataset Provider
+  contract 0.1; keep existing downloader source Weather API identifiers.
+- Use authenticated readonly HTTP, version-bound URLs, streaming transfers,
+  exact lengths and SHA-256 validation, with asset-level restart recovery.
+- Keep private original/decoded caches keyed by dataset content version. Select
+  the newest acquisition per downloader source; never write catalogue storage.
+- Persist working forecasts across catalogue outages and restarts. A failed new
+  conversion keeps the previous index; complete source replacements are atomic.
+- Serialize scans, abort transfers and await ongoing scans on stop; expose
+  operational status and immediate-refresh endpoints.
+- Use the catalogue as the only input; remove local directory scanning and its
+  `inputMode`/`rootDirectory` settings. Require Forecast Dataset Provider and Node 24+.
+- Cover changed content under the same original asset name, including warmed
+  slice buffers, replacement coverage and offline restart (PR #17 scenario).
+- Add catalogue transport/lifecycle tests and real GRIB-to-Weather API coverage.
+
+
 ## [0.6.0] - 2026-10-20
 
 ### Added

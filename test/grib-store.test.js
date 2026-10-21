@@ -16,6 +16,7 @@ const GRID = {
   jScansPositively: true,
 }
 const stamp = d => d.toISOString().replace(/\D/g, '').slice(0, 12)
+const catalogues = new Map()
 
 // Write one synthetic .gribcache slice into cacheDir.
 // values: (j, i, varIdx) → number (NaN allowed)
@@ -44,22 +45,30 @@ function writeSlice(cacheDir, basename, slice) {
   header.writeUInt32BE(json.length, 5)
   const filePath = path.join(cacheDir, `${basename}.t${stamp(new Date(slice.validAt))}.gribcache`)
   fs.writeFileSync(filePath, Buffer.concat([header, json, data]))
+  const slices = fs.readdirSync(cacheDir).filter(file => file.startsWith(`${basename}.t`) && file.endsWith('.gribcache'))
+  fs.writeFileSync(path.join(cacheDir, `.${basename}.complete`), JSON.stringify(slices))
   return filePath
 }
 
-// Create a source directory with a placeholder GRIB (its basename matches the
-// cache slices, so no ingest is triggered) and the given cache slices.
+// Supply an explicit catalogue acquisition and completed decoded slices.
 function makeSource(root, cacheRoot, name, basename, slices) {
   fs.mkdirSync(path.join(root, name), { recursive: true })
   fs.writeFileSync(path.join(root, name, `${basename}.grib2`), Buffer.alloc(0))
   const cacheDir = path.join(cacheRoot, name)
   fs.mkdirSync(cacheDir, { recursive: true })
   for (const slice of slices) writeSlice(cacheDir, basename, slice)
+  const sources = catalogues.get(root) ?? []
+  sources.push({ name, files: [path.join(root, name, `${basename}.grib2`)], cacheDirectory: cacheDir,
+    datasetId: '00000000-0000-4000-8000-000000000001', version: 'a'.repeat(64) })
+  catalogues.set(root, sources)
   return cacheDir
 }
 
 const newStore = (root, cacheRoot) =>
-  new GribStore(root, cacheRoot, () => {}, undefined, { sliceCacheSizeMB: 1 })
+  new GribStore(cacheRoot, () => {}, undefined, {
+    sliceCacheSizeMB: 1,
+    sourceProvider: async () => ({ sources: catalogues.get(root) ?? [], errors: [] }),
+  })
 
 const POS = { latitude: 41, longitude: -9 }  // ≡ (41, 351) in the grid frame
 
@@ -119,7 +128,7 @@ test('forecasts: interpolation, wind mapping and per-hour precip chain', async (
     // Queries served via the slice buffers
     assert.strictEqual(gribCacheStats().buffers, 3)
   } finally {
-    store.stop()
+    await store.stop()
   }
 })
 
@@ -135,26 +144,24 @@ test('rescan drops removed slices and evicts their cache buffers', async () => {
   const cacheDir = makeSource(root, cacheRoot, 'gfs', 'a', [slice('2026-06-10T06:00:00Z')])
   writeSlice(cacheDir, 'b', slice('2026-06-10T12:00:00Z'))
   fs.writeFileSync(path.join(root, 'gfs', 'b.grib2'), Buffer.alloc(0))
+  catalogues.get(root)[0].files.push(path.join(root, 'gfs', 'b.grib2'))
 
-  const store1 = newStore(root, cacheRoot)
-  await store1.start(120)
-  store1.stop()
-  let forecasts = await store1.getForecastsForSource('gfs', POS, 'point', { startDate: '2026-06-10' })
-  assert.strictEqual(forecasts.length, 2)
-  assert.strictEqual(gribCacheStats().buffers, 2)
-
-  // Source 'a' disappears: GRIB placeholder + its cache file
-  fs.rmSync(path.join(root, 'gfs', 'a.grib2'))
-  fs.unlinkSync(path.join(cacheDir, 'a.t202606100600.gribcache'))
-
-  const store2 = newStore(root, cacheRoot)
+  const store = newStore(root, cacheRoot)
   try {
-    await store2.start(120)
-    forecasts = await store2.getForecastsForSource('gfs', POS, 'point', { startDate: '2026-06-10' })
+    await store.start(120)
+    let forecasts = await store.getForecastsForSource('gfs', POS, 'point', { startDate: '2026-06-10' })
+    assert.strictEqual(forecasts.length, 2)
+    assert.strictEqual(gribCacheStats().buffers, 2)
+    // The authoritative acquisition no longer includes asset a.
+    catalogues.get(root)[0].files = [path.join(root, 'gfs', 'b.grib2')]
+    await store.refresh()
+    forecasts = await store.getForecastsForSource('gfs', POS, 'point', { startDate: '2026-06-10' })
     assert.deepStrictEqual(forecasts.map(f => f.date), ['2026-06-10T12:00:00.000Z'])
     assert.strictEqual(gribCacheStats().buffers, 1, "stale 'a' buffer evicted by the scan")
+    assert.strictEqual(fs.existsSync(path.join(cacheDir, 'a.t202606100600.gribcache')), false)
+    assert.strictEqual(fs.existsSync(path.join(cacheDir, '.a.complete')), false)
   } finally {
-    store2.stop()
+    await store.stop()
   }
 })
 
@@ -212,6 +219,6 @@ test('perf smoketest: warm pass is syscall-free and identical to cold', async ()
     assert.ok(warmMs < 2000, `warm pass too slow: ${warmMs.toFixed(1)} ms`)
     assert.ok(warmMs <= coldMs, `warm (${warmMs.toFixed(1)} ms) slower than cold (${coldMs.toFixed(1)} ms)`)
   } finally {
-    store.stop()
+    await store.stop()
   }
 })
