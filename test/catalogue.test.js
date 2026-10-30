@@ -8,6 +8,7 @@ const http = require('node:http')
 const { createHash, randomUUID } = require('node:crypto')
 const { CatalogueClient } = require('../dist/catalogue')
 const { GribStore } = require('../dist/grib-store')
+const ingestManager = require('../dist/ingest-manager')
 
 async function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'weather-catalogue-'))
@@ -241,7 +242,8 @@ test('same original asset name with changed content replaces warm decoded caches
   const tasman = { latitude: -35, longitude: 165 }, paris = { latitude: 49, longitude: 2 }
   assert.equal((await query(tasman)).length, 1, 'prime the old slice buffer')
   assert.deepEqual(await query(paris), [], 'the first acquisition covers only the Tasman area')
-  const oldSlices = fs.readdirSync(path.join(f.options.cacheRoot, 'gfs-0p25')).filter(f => f.endsWith('.gribcache'))
+  const decodedDir = path.join(f.options.cacheRoot, 'gfs-0p25', ingestManager.EXTRACTOR_REVISION)
+  const oldSlices = fs.readdirSync(decodedDir).filter(f => f.endsWith('.gribcache'))
   const replacement = f.add('gfs-0p25', first.run, [fs.readFileSync(path.join(__dirname, 'fixtures/gfs.t00z.pgrb2.1p00.sample.grb2'))], first.id)
   assert.equal(replacement.assets[0].id, first.assets[0].id, 'the producer keeps the same asset name')
   assert.notEqual(replacement.version, first.version)
@@ -250,15 +252,66 @@ test('same original asset name with changed content replaces warm decoded caches
   assert.equal(summary.sources[0].version, replacement.version)
   const updated = await query(paris)
   assert.equal(updated.length, 1, 'the replacement global grid now serves the new area')
-  assert.ok(oldSlices.every(file => !fs.existsSync(path.join(f.options.cacheRoot, 'gfs-0p25', file))))
-  const currentSlices = fs.readdirSync(path.join(f.options.cacheRoot, 'gfs-0p25')).filter(f => f.endsWith('.gribcache'))
+  assert.ok(oldSlices.every(file => !fs.existsSync(path.join(decodedDir, file))))
+  const currentSlices = fs.readdirSync(decodedDir).filter(f => f.endsWith('.gribcache'))
   await store.refresh()
-  assert.deepEqual(fs.readdirSync(path.join(f.options.cacheRoot, 'gfs-0p25')).filter(f => f.endsWith('.gribcache')), currentSlices)
+  assert.deepEqual(fs.readdirSync(decodedDir).filter(f => f.endsWith('.gribcache')), currentSlices)
   await store.stop()
   f.unavailable(true)
   store = createStore()
   await store.start(120)
   assert.deepEqual(await query(paris), updated, 'the new acquisition remains active on an offline restart')
+})
+
+test('extractor upgrades rebuild unchanged originals offline, retry failures and retire warm old paths', { skip: Number(process.versions.node.split('.')[0]) < 24 }, async t => {
+  const f = await fixture(t)
+  f.add('gfs-0p25', '2026-10-21T00:00:00Z', [fs.readFileSync(path.join(__dirname, 'fixtures/gfs.t00z.pgrb2.1p00.850.grb2'))])
+  const originalRevision = ingestManager.EXTRACTOR_REVISION
+  const originalIngest = ingestManager.ingestGrib
+  const snapshotFile = path.join(f.options.cacheRoot, '.index.json')
+  let store, summary, calls = 0, fail = false
+  t.after(async () => {
+    if (store) await store.stop()
+    ingestManager.EXTRACTOR_REVISION = originalRevision
+    ingestManager.ingestGrib = originalIngest
+  })
+  const createStore = () => {
+    const client = f.client()
+    return new GribStore(f.options.cacheRoot, () => {}, s => { summary = s }, { sourceProvider: signal => client.refresh(signal), snapshotFile })
+  }
+  const query = () => store.getForecastsForSource('gfs-0p25', { latitude: -35, longitude: 165 }, 'point', { startDate: '2020-01-01', maxCount: 1 })
+  ingestManager.EXTRACTOR_REVISION = 'extractor-v0'
+  store = createStore()
+  await store.start(120)
+  const expected = await query() // Warm old buffers before changing extractor.
+  assert.equal(expected.length, 1)
+  const oldDirectory = path.join(f.options.cacheRoot, 'gfs-0p25', 'extractor-v0')
+  ingestManager.EXTRACTOR_REVISION = originalRevision
+  ingestManager.ingestGrib = async (...args) => {
+    calls++
+    if (fail) throw new Error('new extractor temporarily unavailable')
+    return originalIngest(...args)
+  }
+  f.unavailable(true)
+  fail = true
+  await store.refresh()
+  assert.equal(calls, 1)
+  assert.deepEqual(await query(), expected, 'a failed rebuild keeps the previous working index')
+  assert.ok(fs.existsSync(oldDirectory))
+  await store.stop()
+  // Restart must reject the old-revision snapshot and rebuild using the local
+  // original mirror even while the catalogue is unavailable.
+  fail = false
+  store = createStore()
+  await store.start(120)
+  assert.equal(calls, 2)
+  assert.equal(summary.sources[0].slices > 0, true)
+  assert.deepEqual(await query(), expected)
+  assert.equal(fs.existsSync(oldDirectory), false)
+  assert.equal(JSON.parse(fs.readFileSync(snapshotFile)).extractorRevision, originalRevision)
+  await store.refresh()
+  assert.equal(calls, 2, 'the current extractor reuses its completed cache')
+  assert.equal(f.requests.filter(r => r.route.includes('/assets/')).length, 1, 'no re-download for an extractor upgrade')
 })
 
 test('selected snapshot MB limit is enforced before downloading assets', async t => {

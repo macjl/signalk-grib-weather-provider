@@ -11,6 +11,10 @@ Downloader sources keep their selectable provider IDs, for example
 [signalk-weather-map](https://github.com/macjl/signalk-weather-map) keep working.
 The catalogue is the only input. Shared GRIB directory scanning is no longer supported.
 
+**Upgrading from 0.6.x:** also update Downloader to 0.4.0 and install Forecast
+Dataset Provider 0.1.0. Follow the [coordinated upgrade guide](docs/upgrading.md)
+for Node.js 24+, access approval, existing-file handling and verification.
+
 ## How it works
 
 ```text
@@ -119,6 +123,14 @@ Original bytes live in `<plugin data directory>/catalogue-assets/`. Content
 versions and asset identities form cache names, so replacing an acquisition
 cannot silently reuse slices from different original bytes. Old caches from
 0.6.x are left untouched for a rollback to the previous plugin version.
+
+Decoded caches and saved indexes also carry an extractor revision. An extractor
+change rebuilds slices from the unchanged private GRIB mirror, including offline,
+under different paths so old buffers and pooled handles cannot alias new output.
+A source's old extractor tree is removed only after its full rebuild succeeds.
+Developers must bump `EXTRACTOR_REVISION` when changing extraction rules, fields,
+the cache layout or the ecCodes decoder. The first stable release rebuilds beta
+decoded caches once; it does not re-download already mirrored originals.
 
 When upgrading, configure the catalogue connection and its readonly token. Old
 `inputMode` and `rootDirectory` configuration fields are ignored; they never

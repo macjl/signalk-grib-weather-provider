@@ -7,6 +7,7 @@ const os = require('os')
 const path = require('path')
 
 const { GribStore } = require('../dist/grib-store.js')
+const { EXTRACTOR_REVISION } = require('../dist/ingest-manager.js')
 const { gribCacheStats, clearGribCache } = require('../dist/grib-cache.js')
 
 // 3×3 grid, S→N, lat 40..42, lon 350..352 (≈ -10..-8 — crosses the
@@ -54,11 +55,12 @@ function writeSlice(cacheDir, basename, slice) {
 function makeSource(root, cacheRoot, name, basename, slices) {
   fs.mkdirSync(path.join(root, name), { recursive: true })
   fs.writeFileSync(path.join(root, name, `${basename}.grib2`), Buffer.alloc(0))
-  const cacheDir = path.join(cacheRoot, name)
+  const sourceCacheDir = path.join(cacheRoot, name)
+  const cacheDir = path.join(sourceCacheDir, EXTRACTOR_REVISION)
   fs.mkdirSync(cacheDir, { recursive: true })
   for (const slice of slices) writeSlice(cacheDir, basename, slice)
   const sources = catalogues.get(root) ?? []
-  sources.push({ name, files: [path.join(root, name, `${basename}.grib2`)], cacheDirectory: cacheDir,
+  sources.push({ name, files: [path.join(root, name, `${basename}.grib2`)], cacheDirectory: sourceCacheDir,
     datasetId: '00000000-0000-4000-8000-000000000001', version: 'a'.repeat(64) })
   catalogues.set(root, sources)
   return cacheDir
@@ -193,19 +195,26 @@ test('perf smoketest: warm pass is syscall-free and identical to cold', async ()
       positions.push({ latitude: 40.1 + (p % 10) * 0.18, longitude: -9.9 + Math.floor(p / 10) * 0.4 })
     }
 
-    let started = process.hrtime.bigint()
     const cold = []
     for (const p of positions) {
       cold.push(await store.getForecastsForSource('perf', p, 'point', { startDate: '2026-06-10' }))
     }
-    const coldMs = Number(process.hrtime.bigint() - started) / 1e6
-
-    started = process.hrtime.bigint()
     const warm = []
-    for (const p of positions) {
-      warm.push(await store.getForecastsForSource('perf', p, 'point', { startDate: '2026-06-10' }))
+    const unexpectedIo = () => { assert.fail('warm point queries must not access the filesystem') }
+    const methods = ['open', 'readFile', 'stat', 'lstat', 'access']
+    const originals = methods.map(method => fs.promises[method])
+    const syncMethods = ['openSync', 'readSync', 'readFileSync', 'statSync', 'lstatSync', 'existsSync']
+    const syncOriginals = syncMethods.map(method => fs[method])
+    try {
+      methods.forEach(method => { fs.promises[method] = unexpectedIo })
+      syncMethods.forEach(method => { fs[method] = unexpectedIo })
+      for (const p of positions) {
+        warm.push(await store.getForecastsForSource('perf', p, 'point', { startDate: '2026-06-10' }))
+      }
+    } finally {
+      methods.forEach((method, i) => { fs.promises[method] = originals[i] })
+      syncMethods.forEach((method, i) => { fs[method] = syncOriginals[i] })
     }
-    const warmMs = Number(process.hrtime.bigint() - started) / 1e6
 
     // Correctness is the strict part: every result full-timeline, warm ≡ cold
     assert.strictEqual(cold.length, 30)
@@ -215,9 +224,6 @@ test('perf smoketest: warm pass is syscall-free and identical to cold', async ()
     }
     assert.strictEqual(gribCacheStats().buffers, 20, 'all slices buffered after the cold pass')
 
-    // Generous time bounds (CI-stable): warm must be fast, and no slower than cold
-    assert.ok(warmMs < 2000, `warm pass too slow: ${warmMs.toFixed(1)} ms`)
-    assert.ok(warmMs <= coldMs, `warm (${warmMs.toFixed(1)} ms) slower than cold (${coldMs.toFixed(1)} ms)`)
   } finally {
     await store.stop()
   }

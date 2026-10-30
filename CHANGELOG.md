@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0] - 2026-10-30
+
+- First stable catalogue-based Weather API provider with verified private
+  originals, offline restart support and automatic readonly access requests.
+- Breaking upgrade from 0.6.x: require Node 24+, Forecast Dataset Provider 0.1.0
+  and the coordinated Downloader 0.4.0 upgrade; shared-file scanning is removed.
+- Version decoded caches and saved indexes by extractor revision. Rebuild
+  unchanged originals after extractor changes without re-downloading, using new
+  paths to avoid stale warm buffers and pooled handles. Retain the prior working
+  source on a failed rebuild, and retire old trees only after a full success.
+- Cover both same-name content replacement and extractor upgrades from #16.
+- Replace the timing-sensitive warm/cold performance assertion with direct
+  checks that warm queries return identical forecasts without filesystem I/O.
+- Add docs/upgrading.md covering approvals, beta upgrades and rollback.
+
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]

@@ -4,7 +4,7 @@ import { Position, WeatherData, WeatherForecastType, WeatherReqParams } from '@s
 import { CacheEntry, SourceConfig, TimeSlice } from './types'
 import { readCacheHeader, queryAtPosition, queryAtPositionSync, evictStaleCache, clearGribCache, configureGribCache } from './grib-cache'
 import { toWeatherData } from './weather-mapper'
-import { ingestGrib, gribBasename, CACHE_FILE_RE } from './ingest-manager'
+import { ingestGrib, gribBasename, CACHE_FILE_RE, EXTRACTOR_REVISION } from './ingest-manager'
 
 const DEFAULT_MAX_CONCURRENT_INGESTS = 2
 const DEFAULT_SLICE_CACHE_MB = 64
@@ -66,8 +66,12 @@ export class GribStore {
   async start(scanIntervalMinutes = 5): Promise<void> {
     if (this.snapshotFile) {
       try {
-        const saved = JSON.parse(await fs.promises.readFile(this.snapshotFile, 'utf8')) as Record<string, { files: string[]; datasetId?: string; version?: string }>
-        for (const [name, source] of Object.entries(saved)) {
+        const saved = JSON.parse(await fs.promises.readFile(this.snapshotFile, 'utf8')) as {
+          extractorRevision: string
+          sources: Record<string, { files: string[]; datasetId?: string; version?: string }>
+        }
+        if (saved.extractorRevision !== EXTRACTOR_REVISION) throw new Error('Decoded forecast index needs rebuilding for the current extractor')
+        for (const [name, source] of Object.entries(saved.sources)) {
           const entries: CacheEntry[] = []
           for (const filePath of source.files) {
             const relative = path.relative(this.cacheRoot, filePath)
@@ -260,7 +264,7 @@ export class GribStore {
     if (this.snapshotFile) {
       const snapshot = Object.fromEntries([...this.index].map(([name, entries]) => [name, { files: entries.map(e => e.filePath), ...this.references.get(name) }]))
       await fs.promises.mkdir(path.dirname(this.snapshotFile), { recursive: true })
-      await fs.promises.writeFile(this.snapshotFile + '.tmp', JSON.stringify(snapshot), { mode: 0o600 })
+      await fs.promises.writeFile(this.snapshotFile + '.tmp', JSON.stringify({ extractorRevision: EXTRACTOR_REVISION, sources: snapshot }), { mode: 0o600 })
       await fs.promises.rename(this.snapshotFile + '.tmp', this.snapshotFile)
     }
     this.onScan?.(summary)
@@ -287,7 +291,9 @@ export class GribStore {
 
   // Returns the number of indexed slices for the source.
   private async scanSource(source: SourceConfig): Promise<number> {
-    const cacheDir = source.cacheDirectory
+    // Different extractors never overwrite a path held by a warm buffer or
+    // pooled handle. A failed rebuild leaves the previous in-memory index usable.
+    const cacheDir = path.join(source.cacheDirectory, EXTRACTOR_REVISION)
     const gribFiles = source.files
     const gribBasenames = new Set(gribFiles.map(gribBasename))
 
@@ -372,6 +378,14 @@ export class GribStore {
 
     this.controller.signal.throwIfAborted()
     this.index.set(source.name, entries)
+    // Retire old extractor trees and pre-revision beta caches only after every
+    // asset of the source has converted successfully.
+    for (const file of await fs.promises.readdir(source.cacheDirectory)) {
+      if ((/^extractor-v\d+$/.test(file) && file !== EXTRACTOR_REVISION) ||
+          CACHE_FILE_RE.test(file) || /^\..+\.complete$/.test(file)) {
+        await fs.promises.rm(path.join(source.cacheDirectory, file), { recursive: true, force: true })
+      }
+    }
     for (const file of await fs.promises.readdir(cacheDir)) {
       const base = CACHE_FILE_RE.exec(file)?.[1]
       const receiptBase = /^\.(.+)\.complete$/.exec(file)?.[1]

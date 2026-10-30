@@ -22,7 +22,7 @@ const get = async (route, auth = headers) => {
   return r.json()
 }
 async function main() {
-  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'node_modules', name, 'package.json'))).version, '0.7.0-beta.3')
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'node_modules', name, 'package.json'))).version, '0.7.0')
   let status
   for (let attempt = 0; attempt < 40; attempt++) {
     try {
