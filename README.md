@@ -99,12 +99,16 @@ no manual token-file setup is needed. Pending requests survive plugin restarts.
 After a denial, restart the plugin to submit a new request. Device access
 requests must be enabled on the catalogue server.
 
-Existing token files are reused and reread for rotation. Automatically issued
-tokens rejected with HTTP 401 request approval again. Externally configured
+Existing token files are reused and reread for rotation. After a catalogue HTTP
+401, automatically issued tokens are checked through Signal K's `/loginStatus`.
+A fresh approval is requested only for a confirmed invalid credential; a valid
+token or an unavailable/inconclusive check is preserved. Externally configured
 tokens remain under their owner's control. Request IDs and token contents are
 never exposed in status responses or logs. Keep this consumer's token separate
 from the downloader's readwrite token, and use a separate file when changing
 catalogue servers.
+
+For repeated requests, see [redacted access diagnostics](docs/catalogue-access-diagnostics.md).
 
 `GET /plugins/signalk-grib-weather-provider/status` exposes input mode,
 source slice counts, selected dataset IDs/content versions and refresh errors.

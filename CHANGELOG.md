@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Preserve automatically issued tokens when catalogue HTTP 401 is a permission
+  refusal: confirm authentication through Signal K loginStatus before renewal.
+- Serialize authorization checks, retain credentials on ambiguous/failed checks,
+  and preserve token rotation/stop safeguards (downloader issue #20).
+- Add redacted lifecycle diagnostics and document the shared read-only collector.
+
 ## [0.7.0] - 2026-10-30
 
 - First stable catalogue-based Weather API provider with verified private
