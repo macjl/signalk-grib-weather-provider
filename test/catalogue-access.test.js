@@ -179,7 +179,9 @@ test('plugin startup exposes a pending request, resumes after approval and stops
   }
   t.after(() => plugin.stop())
   plugin.start({ catalogueUrl: f.options.endpoint, sources: permissions === 'readwrite' ? [{ model: 'gfs', resolution: '0p25', hours: 6, autoDownload: true }] : [] })
-  await waitFor(() => f.requests.length)
+  // Receiving the HTTP request does not mean the asynchronous startup scan has
+  // reported its access status yet. Wait for both observable events.
+  await waitFor(() => f.requests.length && messages.some(message => /Access Requests/.test(message)))
   assert.equal(status().catalogueAccess.state, 'pending')
   assert.equal(f.catalogueRequests.length, 0)
   assert.equal(f.requests[0].body.permissions, permissions)
