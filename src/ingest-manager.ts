@@ -4,6 +4,10 @@ import { ingestGribWasm } from './ingest-wasm'
 
 const MAX_INGEST_ATTEMPTS = 5
 
+// Bump when extraction semantics, recognized fields, cache layout or the
+// ecCodes decoder change. Original GRIB mirrors remain reusable.
+export const EXTRACTOR_REVISION = 'extractor-v1'
+
 // Tracks GRIB files currently being ingested to prevent duplicate jobs.
 const pending = new Set<string>()
 // Failed ingest attempts per GRIB path — abandoned after MAX_INGEST_ATTEMPTS.

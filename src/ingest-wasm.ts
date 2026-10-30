@@ -5,8 +5,8 @@ import { GridMeta } from './types'
 
 // One entry per recognized GRIB message: (shortName, typeOfLevel, level) →
 // (cache field, scale). First matching definition per (validity time, field)
-// wins. Appending entries is backward compatible: existing caches keep their
-// own `vars` list and readers drive off it.
+// wins. Bump EXTRACTOR_REVISION in ingest-manager when changing these definitions
+// so unchanged GRIB originals are decoded again with the new field selection.
 const PARAM_DEFS: [string, string, number, string, number][] = [
   ['2t',    'heightAboveGround', 2,  'temp2m',    1.0],
   ['prmsl', 'meanSea',           0,  'pressure',  1.0],

@@ -1,13 +1,17 @@
-// A source is a subdirectory of rootDirectory, discovered at scan time.
-// Its directory name is the provider ID suffix and display name.
+// Sources are complete, verified catalogue acquisitions.
 export interface SourceConfig {
-  name: string         // directory name — provider ID suffix and index key
-  directory: string    // <rootDirectory>/<name>
+  files: string[]      // explicit, verified catalogue assets
+  datasetId: string
+  version: string
+  name: string         // provider ID suffix and index key
   cacheDirectory: string  // <cacheRoot>/<name>
 }
 
 export interface PluginSettings {
-  rootDirectory?: string         // parent directory of all GRIB sources
+  catalogueUrl?: string
+  catalogueTokenFile?: string
+  maxAssetMB?: number
+  maxCatalogueCacheMB?: number
   cacheRoot?: string             // where .gribcache trees live (default: plugin data dir)
   scanIntervalMinutes?: number
   maxConcurrentIngests?: number  // cap on simultaneous GRIB→cache conversions
