@@ -2,20 +2,37 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
-import { Readable, Transform } from 'node:stream'
+import { Transform, type Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { SourceConfig } from './types'
 
-const API = '/plugins/signalk-forecast-dataset-provider'
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
 const HASH = /^[a-f0-9]{64}$/
-interface Asset { id: string; size: number; sha256: string; href: string }
+// Retain the cache identity used by existing local installations.
+export const LOCAL_CATALOGUE_CACHE_KEY = 'http://127.0.0.1:3000'
+export const WAITING_FOR_LOCAL_CATALOGUE = 'Waiting for Forecast Dataset Provider with local catalogue support'
+
+interface LocalCatalogueReader {
+  contractVersion: string
+  datasets(query: Record<string, string>): unknown
+  dataset(id: string, version: string): unknown
+  readAsset(id: string, version: string, asset: string, signal: AbortSignal): Readable
+}
+
+const localKey = Symbol.for('macjl.forecast-datasets.catalogues.v1')
+function findLocalCatalogue(scope: string): LocalCatalogueReader | undefined {
+  const service = (globalThis as typeof globalThis & { [localKey]?: Map<string, LocalCatalogueReader> })[localKey]?.get(scope)
+  // Older versions can accept local publications but do not expose discovery.
+  return typeof service?.datasets === 'function' ? service : undefined
+}
+
+interface Asset { id: string; size: number; sha256: string }
 interface Dataset {
   id: string; version: string; producer: string; format: string; state: string; kind: string
   run?: string; createdAt: string; requested?: { source?: string }; assets: Asset[]
 }
 interface Mirror { endpoint: string; datasets: Dataset[] }
-export interface CatalogueOptions { url: string; tokenFile: string; directory: string; cacheRoot: string; maxAssetMB?: number; maxCatalogueCacheMB?: number; tokenReader?: () => string; onUnauthorized?: (token: string) => void }
+export interface CatalogueOptions { directory: string; cacheRoot: string; localScope: string; maxAssetMB?: number; maxCatalogueCacheMB?: number }
 
 function megabytes(value: number): number {
   const bytes = Math.floor(value * 1_000_000)
@@ -24,37 +41,19 @@ function megabytes(value: number): number {
 }
 
 export class CatalogueClient {
-  readonly endpoint: string
   private verified = new Set<string>()
   private maxAssetBytes: number
   private maxCacheBytes: number
 
   constructor(private options: CatalogueOptions, private log: (message: string) => void) {
-    const url = new URL(options.url)
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Catalogue URL must be HTTP(S), without credentials, query or fragment')
-    if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) throw new Error('Remote catalogue servers require HTTPS')
-    this.endpoint = url.href.replace(/\/$/, '')
     this.maxAssetBytes = megabytes(options.maxAssetMB ?? 2000)
     this.maxCacheBytes = megabytes(options.maxCatalogueCacheMB ?? 8000)
   }
 
-  private headers(): Record<string, string> {
-    const token = this.options.tokenReader ? this.options.tokenReader() : this.options.tokenFile ? fs.readFileSync(this.options.tokenFile, 'utf8').trim() : ''
-    return { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Accept-Encoding': 'identity' }
+  get connection(): 'local' | 'waiting' {
+    return findLocalCatalogue(this.options.localScope) ? 'local' : 'waiting'
   }
-  private async request(route: string, signal: AbortSignal): Promise<Response> {
-    const headers = this.headers()
-    const response = await fetch(this.endpoint + route, {
-      headers, signal: AbortSignal.any([signal, AbortSignal.timeout(300_000)]), redirect: 'error',
-    })
-    if (response.status === 401) this.options.onUnauthorized?.(headers.Authorization?.slice(7) ?? '')
-    if (!response.ok) {
-      await response.body?.cancel()
-      throw new Error(`Forecast catalogue: HTTP ${response.status}${[401, 403].includes(response.status) ? ' (check the readonly token file)' : ''}`)
-    }
-    return response
-  }
-  private async json(route: string, signal: AbortSignal): Promise<any> { return (await this.request(route, signal)).json() }
+
   private manifest(): string { return path.join(this.options.directory, 'mirror.json') }
   private folder(dataset: Dataset): string { return path.join(this.options.directory, dataset.id, dataset.version) }
   private assetFile(dataset: Dataset, asset: Asset): string {
@@ -72,9 +71,6 @@ export class CatalogueClient {
     for (const asset of dataset.assets) {
       if (typeof asset.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(asset.id) || ids.has(asset.id) || !HASH.test(asset.sha256) || !Number.isSafeInteger(asset.size) || asset.size < 1 || asset.size > this.maxAssetBytes) throw new Error('Invalid or oversized catalogue asset')
       ids.add(asset.id)
-      // Never forward a bearer token to an arbitrary asset URL or follow redirects.
-      const expected = `${API}/datasets/${dataset.id}/versions/${dataset.version}/assets/${asset.id}`
-      if (asset.href !== expected) throw new Error('Asset URL is not bound to the selected catalogue version')
     }
   }
   private sources(datasets: Dataset[]): SourceConfig[] {
@@ -102,16 +98,11 @@ export class CatalogueClient {
       return false
     }
   }
-  private async download(dataset: Dataset, asset: Asset, signal: AbortSignal): Promise<void> {
+  private async download(dataset: Dataset, asset: Asset, signal: AbortSignal, local: LocalCatalogueReader): Promise<void> {
     if (await this.validFile(dataset, asset, signal)) return
     const file = this.assetFile(dataset, asset), part = file + '.part'
     await fs.promises.mkdir(path.dirname(file), { recursive: true })
-    const response = await this.request(asset.href, signal)
-    const length = response.headers.get('content-length')
-    if (!response.body || response.status !== 200 || response.headers.get('content-encoding') || (length !== null && Number(length) !== asset.size)) {
-      await response.body?.cancel()
-      throw new Error('Catalogue asset has an unexpected representation or length')
-    }
+    const content = local.readAsset(dataset.id, dataset.version, asset.id, signal)
     const hash = createHash('sha256')
     let size = 0
     const meter = new Transform({ transform(chunk: Buffer, _encoding, callback) {
@@ -120,7 +111,7 @@ export class CatalogueClient {
       hash.update(chunk); callback(null, chunk)
     } })
     try {
-      await pipeline(Readable.fromWeb(response.body as any), meter, fs.createWriteStream(part, { mode: 0o600 }), { signal })
+      await pipeline(content, meter, fs.createWriteStream(part, { mode: 0o600 }), { signal })
       if (size !== asset.size || hash.digest('hex') !== asset.sha256) throw new Error('Catalogue asset length or SHA-256 mismatch')
       await fs.promises.rename(part, file)
       this.verified.add(file)
@@ -130,18 +121,21 @@ export class CatalogueClient {
 
   async refresh(signal: AbortSignal): Promise<{ sources: SourceConfig[]; errors: string[] }> {
     try {
-      const health = await this.json(API + '/status', signal)
-      if (health.contractVersion !== '0.1') throw new Error('Forecast catalogue contract 0.1 is required')
+      const local = findLocalCatalogue(this.options.localScope)
+      if (!local) throw new Error(WAITING_FOR_LOCAL_CATALOGUE)
+      if (local.contractVersion !== '0.1') throw new Error('Forecast catalogue contract 0.1 is required')
       const candidates: Dataset[] = [], seen = new Set<string>()
       for (let offset = 0; ; offset += 100) {
+        signal.throwIfAborted()
         if (offset >= 10000) throw new Error('Catalogue discovery limit exceeded')
-        const page = await this.json(`${API}/datasets?format=grib2&kind=forecast&state=complete&limit=100&offset=${offset}`, signal)
+        const filters = { format: 'grib2', kind: 'forecast', state: 'complete', limit: '100', offset: String(offset) }
+        const page = local.datasets(filters)
         if (!page || Array.isArray(page) || typeof page !== 'object') throw new Error('Invalid catalogue listing')
         const entries = Object.entries(page) as [string, { version: string }][]
         for (const [id, summary] of entries) {
           if (!UUID.test(id) || !HASH.test(summary.version) || seen.has(id)) throw new Error('Catalogue changed during pagination; retry discovery')
           seen.add(id)
-          const detail = await this.json(`${API}/datasets/${id}/versions/${summary.version}`, signal) as Dataset
+          const detail = local.dataset(id, summary.version) as Dataset
           this.validate(detail)
           if (detail.id !== id || detail.version !== summary.version) throw new Error('Catalogue detail identity mismatch')
           candidates.push(detail)
@@ -163,10 +157,10 @@ export class CatalogueClient {
       let total = 0
       for (const dataset of datasets) for (const asset of dataset.assets) total += asset.size
       if (!Number.isSafeInteger(total) || total > this.maxCacheBytes) throw new Error('Selected catalogue assets exceed the local cache byte limit')
-      for (const dataset of datasets) for (const asset of dataset.assets) { signal.throwIfAborted(); await this.download(dataset, asset, signal) }
+      for (const dataset of datasets) for (const asset of dataset.assets) { signal.throwIfAborted(); await this.download(dataset, asset, signal, local) }
       signal.throwIfAborted()
       await fs.promises.mkdir(this.options.directory, { recursive: true })
-      const manifest: Mirror = { endpoint: this.endpoint, datasets }
+      const manifest: Mirror = { endpoint: LOCAL_CATALOGUE_CACHE_KEY, datasets }
       await fs.promises.writeFile(this.manifest() + '.tmp', JSON.stringify(manifest), { mode: 0o600 })
       await fs.promises.rename(this.manifest() + '.tmp', this.manifest())
       // Only a complete successful discovery authorizes removal of old private copies.
@@ -189,7 +183,7 @@ export class CatalogueClient {
       // Persisted original content supports restart during a catalogue outage.
       let mirror: Mirror
       try { mirror = JSON.parse(await fs.promises.readFile(this.manifest(), 'utf8')) as Mirror } catch { throw error }
-      if (mirror.endpoint !== this.endpoint) throw new Error('Cached catalogue belongs to another server')
+      if (mirror.endpoint !== LOCAL_CATALOGUE_CACHE_KEY) throw new Error('Cached catalogue belongs to another server')
       for (const dataset of mirror.datasets) {
         this.validate(dataset)
         for (const asset of dataset.assets) if (!(await this.validFile(dataset, asset, signal))) throw new Error('Cached catalogue asset is missing or damaged')

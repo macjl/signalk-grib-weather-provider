@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.0] - 2026-11-21
+
+- Read GRIBs directly from Forecast Dataset Provider 0.4.0 or later on the same Signal K instance. The catalogue connection requires no token or device access approval.
+- Remove the catalogue URL and token settings. To use forecasts from a remote Signal K server, configure it as a source in GRIB Downloader and publish the forecasts to the local catalogue.
+- Keep the verified offline cache and the same Weather API source IDs for unchanged local datasets.
+
 ## [0.7.1] - 2026-10-31
 
 - Preserve automatically issued tokens when catalogue HTTP 401 is a permission

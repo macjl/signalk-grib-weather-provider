@@ -8,8 +8,6 @@ export interface SourceConfig {
 }
 
 export interface PluginSettings {
-  catalogueUrl?: string
-  catalogueTokenFile?: string
   maxAssetMB?: number
   maxCatalogueCacheMB?: number
   cacheRoot?: string             // where .gribcache trees live (default: plugin data dir)
