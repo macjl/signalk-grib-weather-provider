@@ -5,8 +5,7 @@ import { Plugin, ServerAPI } from '@signalk/server-api'
 import { WeatherProviderRegistry } from '@signalk/server-api'
 import { GribStore, ScanSummary } from './grib-store'
 import { PluginSettings } from './types'
-import { CatalogueClient } from './catalogue'
-import { CatalogueAccess } from './catalogue-access'
+import { CatalogueClient, LOCAL_CATALOGUE_CACHE_KEY, WAITING_FOR_LOCAL_CATALOGUE } from './catalogue'
 
 interface PluginApp extends ServerAPI, WeatherProviderRegistry {}
 
@@ -22,14 +21,6 @@ function expandHome(p: string): string {
 const buildSchema = () => ({
   type: 'object',
   properties: {
-    catalogueUrl: {
-      type: 'string', title: 'Forecast catalogue server URL', default: 'http://127.0.0.1:3000',
-      description: 'Signal K server running Forecast Dataset Provider 0.1.x. Remote servers require HTTPS.',
-    },
-    catalogueTokenFile: {
-      type: 'string', title: 'Readonly catalogue token file', default: '',
-      description: 'Token file, default <plugin data directory>/catalogue-token. When missing, approve the automatic readonly request in Signal K Security > Access Requests. Contents are never exposed in status or logs.',
-    },
     maxAssetMB: { type: 'number', title: 'Maximum size per catalogue asset (MB)', description: '1 MB = 1,000,000 bytes. Decimal values are allowed.', minimum: 0.000001, default: 2000 },
     maxCatalogueCacheMB: { type: 'number', title: 'Maximum size of selected catalogue assets (MB)', description: 'Combined original file sizes in one selected snapshot, not a global disk quota. 1 MB = 1,000,000 bytes.', minimum: 0.000001, default: 8000 },
     cacheRoot: {
@@ -73,8 +64,8 @@ module.exports = (server: PluginApp): Plugin => {
   let store: GribStore | null = null
   let registered = new Set<string>()
   let lastSummary: ScanSummary = { sources: [], errors: [] }
-  let catalogueUrl: string | undefined
-  let access: CatalogueAccess | null = null
+  let catalogue: CatalogueClient | null = null
+  let localTimer: ReturnType<typeof setInterval> | undefined
 
   const plugin: Plugin = {
     id: PLUGIN_ID,
@@ -89,27 +80,15 @@ module.exports = (server: PluginApp): Plugin => {
         return
       }
 
-      const configuredCacheRoot = expandHome(options.cacheRoot || path.join(server.getDataDirPath(), 'cache'))
+      const dataDir = server.getDataDirPath()
+      const configuredCacheRoot = expandHome(options.cacheRoot || path.join(dataDir, 'cache'))
       const cacheRoot = path.join(configuredCacheRoot, 'catalogue')
-      const tokenFile = expandHome(options.catalogueTokenFile || path.join(server.getDataDirPath(), 'catalogue-token'))
-      if (!path.isAbsolute(tokenFile)) throw new Error('Catalogue token file must be absolute')
-      const catalogue = new CatalogueClient({
-        url: options.catalogueUrl || 'http://127.0.0.1:3000', tokenFile,
-        directory: path.join(server.getDataDirPath(), 'catalogue-assets'), cacheRoot,
+      const client = new CatalogueClient({
+        localScope: path.dirname(dataDir),
+        directory: path.join(dataDir, 'catalogue-assets'), cacheRoot,
         maxAssetMB: options.maxAssetMB, maxCatalogueCacheMB: options.maxCatalogueCacheMB,
-        tokenReader: () => authorizer.token(),
-        onUnauthorized: token => authorizer.rejected(token),
       }, message => server.debug(message))
-      catalogueUrl = catalogue.endpoint
-      let active: GribStore
-      let initialScan: Promise<void>
-      const authorizer = new CatalogueAccess({
-        endpoint: catalogue.endpoint, tokenFile, dataDir: server.getDataDirPath(),
-        pluginId: PLUGIN_ID, permissions: 'readonly',
-        onChange: () => { if (access && access.status().state !== 'ready') server.setPluginStatus(access.status().message) },
-        onReady: () => { initialScan.then(() => { if (store === active) return active.refresh() }).catch(() => server.debug('Catalogue refresh after access approval failed')) },
-      })
-      access = authorizer
+      catalogue = client
 
       // Register/unregister weather providers to follow discovered sources.
       const syncProviders = (names: string[]) => {
@@ -142,8 +121,8 @@ module.exports = (server: PluginApp): Plugin => {
         if (store !== active) return
         lastSummary = summary
         syncProviders(summary.sources.filter(s => s.slices > 0).map(s => s.name))
-        if (access && access.status().state !== 'ready') {
-          server.setPluginStatus(access.status().message)
+        if (client.connection === 'waiting') {
+          server.setPluginStatus(WAITING_FOR_LOCAL_CATALOGUE)
           return
         }
         const parts = summary.sources.map(s => `${s.name}: ${s.slices} slice(s)`)
@@ -154,13 +133,13 @@ module.exports = (server: PluginApp): Plugin => {
         }
       }
 
-      active = new GribStore(
+      const active = new GribStore(
         cacheRoot,
         (msg: string) => server.debug(msg),
         onScan,
         {
-          sourceProvider: signal => catalogue.refresh(signal),
-          snapshotFile: path.join(cacheRoot, `.weather-index-${createHash('sha256').update(catalogue.endpoint).digest('hex').slice(0, 16)}.json`),
+          sourceProvider: signal => client.refresh(signal),
+          snapshotFile: path.join(cacheRoot, `.weather-index-${createHash('sha256').update(LOCAL_CATALOGUE_CACHE_KEY).digest('hex').slice(0, 16)}.json`),
           maxConcurrentIngests: Math.max(1, Math.floor(options.maxConcurrentIngests ?? 2)),
           sliceCacheSizeMB: options.sliceCacheSizeMB ?? 64,
         }
@@ -168,18 +147,26 @@ module.exports = (server: PluginApp): Plugin => {
 
       store = active
       server.setPluginStatus('Starting up …')
-      initialScan = active.start(Math.max(1, options.scanIntervalMinutes ?? 5)).catch((err: unknown) => {
+      let connection = client.connection
+      const initialScan = active.start(Math.max(1, options.scanIntervalMinutes ?? 5)).catch((err: unknown) => {
         if (store === active) server.setPluginError(`Startup error: ${err}`)
       })
-      access.start()
+      localTimer = setInterval(() => {
+        const current = client.connection
+        if (current === connection) return
+        connection = current
+        void initialScan.then(() => {
+          if (store === active) return active.refresh()
+        }).catch(error => server.debug(`Catalogue refresh failed: ${error}`))
+      }, 2_000)
     },
 
     stop: async () => {
       const active = store
       store = null
-      const previousAccess = access
-      access = null
-      await previousAccess?.stop()
+      catalogue = null
+      clearInterval(localTimer)
+      localTimer = undefined
       const weatherApi = (server as any).weatherApi
       for (const name of registered) {
         weatherApi?.unRegister(`${PLUGIN_ID}:${name}`)
@@ -194,8 +181,8 @@ module.exports = (server: PluginApp): Plugin => {
         res.status(202).json({ started: true })
       })
       router.get('/status', (_req: any, res: any) => {
-        if (!store) return res.status(503).json({ error: 'plugin not started' })
-        res.json({ inputMode: 'catalogue', catalogueUrl, catalogueAccess: access?.status(), ...lastSummary })
+        if (!store || !catalogue) return res.status(503).json({ error: 'plugin not started' })
+        res.json({ inputMode: 'catalogue', catalogueTransport: catalogue.connection, ...lastSummary })
       })
     },
   }

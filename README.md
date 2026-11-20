@@ -2,23 +2,24 @@
 
 Signal K **Weather API provider** that decodes immutable GRIB2 acquisitions from
 [Forecast Dataset Provider](https://github.com/macjl/signalk-forecast-dataset-provider).
-It discovers the catalogue through authenticated HTTP, keeps a private verified
-copy of the selected assets, and serves the standard Weather API from decoded
-local caches. No shared downloader/provider directory is needed.
+It reads the catalogue directly in the same Signal K instance, keeps a private
+verified copy of the selected assets, and serves the standard Weather API from
+decoded local caches.
 
 Downloader sources keep their selectable provider IDs, for example
 `signalk-grib-weather-provider:gfs-0p25`, so existing Weather API clients such as
 [signalk-weather-map](https://github.com/macjl/signalk-weather-map) keep working.
 The catalogue is the only input. Shared GRIB directory scanning is no longer supported.
 
-**Upgrading from 0.6.x:** also update Downloader to 0.4.0 and install Forecast
-Dataset Provider 0.1.0. Follow the [coordinated upgrade guide](docs/upgrading.md)
-for Node.js 24+, access approval, existing-file handling and verification.
+**Upgrade together:** update Forecast Dataset Provider to 0.4.0 or later before
+upgrading this plugin. If you also use GRIB Downloader, update it to 0.8.0 or
+later. See the [historical upgrade guide](docs/upgrading.md) for the transition
+from the 0.6.x shared-directory releases.
 
 ## How it works
 
 ```text
-Forecast Dataset Provider ──HTTP + SHA-256──▶ private GRIB copy
+Forecast Dataset Provider ──local access──▶ verified private GRIB copy
                                                │
                                   WebAssembly ecCodes
                                                │
@@ -34,10 +35,8 @@ Forecast Dataset Provider ──HTTP + SHA-256──▶ private GRIB copy
    acquisition time. Other producers receive independent `dataset-<UUID>`
    provider names. Historical acquisitions remain owned by the catalogue;
    this consumer reads only the selected acquisition per source.
-3. Follow version-bound asset URLs on the configured server, stream exact
-   original bytes to private files, and check their lengths and SHA-256 hashes.
-   Interrupted transfers resume at asset level. Neither redirects nor arbitrary
-   asset origins receive the consumer token.
+3. Stream the version's original assets to private files and check their
+   lengths and SHA-256 hashes. Interrupted transfers resume at asset level.
 4. Convert all selected assets with the bundled
    [ecCodes WebAssembly build](https://github.com/meri-imperiumi/eccodes-wasm).
    Each asset's decoded slices become usable only after a complete conversion.
@@ -45,9 +44,7 @@ Forecast Dataset Provider ──HTTP + SHA-256──▶ private GRIB copy
 5. Answer point queries using bilinear interpolation of four surrounding grid
    points, with the same Weather API mapping and SI units as previous versions.
 
-The consumer uses a **readonly** application token. It does not create/delete
-catalogue datasets, publish verified inventory or depend on unimplemented
-provider processing/subsetting capabilities.
+The consumer uses the catalogue's read operations without a token.
 
 Extracted variables (when present): 10 m wind U/V, gust, 2 m temperature,
 surface temperature / sea surface temperature, MSL pressure, 2 m relative
@@ -70,7 +67,7 @@ decoded caches are pruned after successful catalogue discovery/replacement.
 
 - Signal K server **2.34 or later within 2.x** with the Weather API.
 - Node.js **24+** for ecCodes WebAssembly memory64 support.
-- Enabled **Forecast Dataset Provider 0.1.x** for catalogue mode.
+- Enabled **Forecast Dataset Provider 0.4.0 or later** on the same Signal K server.
 
 No container runtime or external ecCodes image is needed by the plugin.
 
@@ -78,8 +75,6 @@ No container runtime or external ecCodes image is needed by the plugin.
 
 | Option | Description |
 |---|---|
-| `catalogueUrl` | Signal K base URL, default `http://127.0.0.1:3000`. Remote servers require HTTPS. |
-| `catalogueTokenFile` | Absolute path to a readonly application token, default `<plugin data directory>/catalogue-token`. Store with mode `0600` for the server user. The file is reread for token rotation; contents never enter status or logs. |
 | `maxAssetMB` | Maximum size per selected GRIB asset, default 2000 MB. 1 MB = 1,000,000 bytes; decimals are allowed. |
 | `maxCatalogueCacheMB` | Maximum combined original file sizes in one selected catalogue snapshot, default 8000 MB. This is not a total disk quota; old/new copies may coexist while transferring. |
 | `cacheRoot` | Decoded-cache root, default `<plugin data directory>/cache`. Its `catalogue/` child holds decoded acquisitions. |
@@ -91,27 +86,15 @@ Size limits now use **MB** (1 MB = 1,000,000 bytes). The former byte-valued
 settings are ignored; there is no migration. Configure the new MB fields or
 leave their new defaults of 2000 and 8000 MB.
 
-When the token file is missing, the plugin automatically requests **readonly**
-access. On the catalogue server's Signal K Admin UI, open **Security → Access
-Requests** and approve the **signalk-grib-weather-provider** request. The plugin
-saves its token with permissions `0600` and immediately refreshes the catalogue;
-no manual token-file setup is needed. Pending requests survive plugin restarts.
-After a denial, restart the plugin to submit a new request. Device access
-requests must be enabled on the catalogue server.
+The plugin waits for a compatible Forecast Dataset Provider in the same
+Signal K instance. Previous catalogue URL and token settings are ignored.
+To use GRIBs from another Signal K server, configure it as a download
+source in GRIB Downloader. Once published locally, those datasets are
+available to the Weather Provider.
 
-Existing token files are reused and reread for rotation. After a catalogue HTTP
-401, automatically issued tokens are checked through Signal K's `/loginStatus`.
-A fresh approval is requested only for a confirmed invalid credential; a valid
-token or an unavailable/inconclusive check is preserved. Externally configured
-tokens remain under their owner's control. Request IDs and token contents are
-never exposed in status responses or logs. Keep this consumer's token separate
-from the downloader's readwrite token, and use a separate file when changing
-catalogue servers.
-
-For repeated requests, see [redacted access diagnostics](docs/catalogue-access-diagnostics.md).
-
-`GET /plugins/signalk-grib-weather-provider/status` exposes input mode,
-source slice counts, selected dataset IDs/content versions and refresh errors.
+`GET /plugins/signalk-grib-weather-provider/status` exposes the catalogue
+transport (`local` or `waiting`), source slice counts, selected dataset
+IDs/content versions and refresh errors.
 `POST /plugins/signalk-grib-weather-provider/refresh` starts a scan immediately
 (202); overlapping refreshes share the running scan. These operational routes
 use Signal K's default administrator access control.
@@ -121,7 +104,8 @@ decoded index, including across a restart. An unsupported or failed new GRIB
 conversion preserves the previously working forecasts and reports an error.
 Removal from a successful catalogue listing removes the corresponding Weather
 API source and private caches. A failed listing never authorizes deletion.
-Scans are serialized; plugin stop aborts HTTP transfers and waits for the scan.
+Scans are serialized. Stopping the plugin aborts asset transfers and waits for
+the scan.
 
 Original bytes live in `<plugin data directory>/catalogue-assets/`. Content
 versions and asset identities form cache names, so replacing an acquisition
@@ -136,7 +120,7 @@ Developers must bump `EXTRACTOR_REVISION` when changing extraction rules, fields
 the cache layout or the ecCodes decoder. The first stable release rebuilds beta
 decoded caches once; it does not re-download already mirrored originals.
 
-When upgrading, configure the catalogue connection and its readonly token. Old
+When upgrading from a shared directory, install a compatible Dataset Provider. Old
 `inputMode` and `rootDirectory` configuration fields are ignored; they never
 enable directory scanning or a fallback when the catalogue is unavailable.
 Existing files must be published by a catalogue producer before they are eligible.
@@ -153,7 +137,7 @@ npm pack
 
 Run on Node 24+ for the full suite. Older developer runtimes explicitly skip
 WebAssembly functional tests. Tests cover real GRIB decoding from catalogue
-HTTP assets, hashes, pagination, asset-level resume, offline restart, failed
+assets, hashes, pagination, asset-level resume, offline restart, failed
 replacement recovery, source deletion, serialization and cancellation. A real
 GRIB regression test replaces a regional asset with a global asset under the
 same original asset name, checks warm-cache invalidation and an offline restart.
